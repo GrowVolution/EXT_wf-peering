@@ -1,0 +1,358 @@
+{
+  "PEERING_PAGE_TITLE": [
+    "Peering status",
+    "Peering-Status"
+  ],
+  "PEERING_NOSCRIPT": [
+    "JavaScript is required to load the status data from the public API.",
+    "JavaScript wird benötigt, um die Statusdaten über die öffentliche API zu laden."
+  ],
+  "PEERING_NODE_LABEL": [
+    "node %(node)s",
+    "Knoten %(node)s"
+  ],
+  "PEERING_TITLE_HOST": [
+    "Host status",
+    "Host-Status"
+  ],
+  "PEERING_TITLE_PEER": [
+    "Peer status",
+    "Peer-Status"
+  ],
+  "PEERING_LOADING": [
+    "Loading",
+    "Lädt"
+  ],
+  "PEERING_UNCLEAR": [
+    "Unclear",
+    "Unklar"
+  ],
+  "PEERING_DISCLAIMER": [
+    "This page is rendered by the node you are visiting. A green status here is not proof of integrity: compare it with the status pages of other, independently operated peers.",
+    "Diese Seite wird vom besuchten Knoten selbst ausgeliefert. Ein grüner Status ist kein Integritätsbeweis: Vergleiche ihn mit den Statusseiten anderer, unabhängig betriebener Peers."
+  ],
+  "PEERING_DEBUG_NOTE": [
+    "This node runs in debug mode: plain HTTP and local addresses are allowed and HTTPS is not part of the assessment. Never rely on it in production.",
+    "Dieser Knoten läuft im Debug-Modus: HTTP und lokale Adressen sind erlaubt, HTTPS fließt nicht in die Bewertung ein. Im Produktivbetrieb nie darauf verlassen."
+  ],
+  "PEERING_LOCAL": [
+    "measured locally",
+    "lokal gemessen"
+  ],
+  "PEERING_PEER": [
+    "confirmed by peers",
+    "von Peers bestätigt"
+  ],
+  "PEERING_CLAIMED": [
+    "claimed by the host",
+    "nur vom Host behauptet"
+  ],
+  "PEERING_UNVERIFIABLE": [
+    "not verifiable",
+    "nicht überprüfbar"
+  ],
+  "PEERING_SELF": [
+    "self-reported",
+    "Selbstauskunft"
+  ],
+  "PEERING_SELF_NOTE": [
+    "A host cannot vouch for itself; compare the assessments published by peers.",
+    "Ein Host kann sich nicht selbst als vertrauenswürdig ausweisen; vergleiche die Bewertungen der Peers."
+  ],
+  "PEERING_NODE": [
+    "This node",
+    "Dieser Knoten"
+  ],
+  "PEERING_THIS_NODE": [
+    "this node",
+    "dieser Knoten"
+  ],
+  "PEERING_TRUST": [
+    "Trust assessment",
+    "Vertrauensbewertung"
+  ],
+  "PEERING_PEERS": [
+    "Peers",
+    "Peers"
+  ],
+  "PEERING_INTEGRITY": [
+    "Integrity entries",
+    "Integritätseinträge"
+  ],
+  "PEERING_PUBLISHED": [
+    "Published artifacts that are not served publicly",
+    "Veröffentlichte, nicht öffentlich ausgelieferte Artefakte"
+  ],
+  "PEERING_CHECKPOINTS": [
+    "Merkle checkpoints",
+    "Merkle-Checkpoints"
+  ],
+  "PEERING_AGREEMENT": [
+    "Agreement with other nodes",
+    "Übereinstimmung mit anderen Knoten"
+  ],
+  "PEERING_SYNC": [
+    "Synchronisation",
+    "Synchronisierung"
+  ],
+  "PEERING_UPTIME": [
+    "Uptime and downtime",
+    "Uptime und Downtime"
+  ],
+  "PEERING_CONFLICTS": [
+    "Warnings and deviations",
+    "Warnungen und Abweichungen"
+  ],
+  "PEERING_LEDGER": [
+    "Ledger",
+    "Ledger"
+  ],
+  "PEERING_NONE": [
+    "Nothing recorded yet.",
+    "Noch nichts erfasst."
+  ],
+  "PEERING_SIGNALS": [
+    "Signals",
+    "Signale"
+  ],
+  "PEERING_COMPLETENESS": [
+    "Data completeness",
+    "Datenvollständigkeit"
+  ],
+  "PEERING_BASIS": [
+    "Basis",
+    "Bewertungsgrundlage"
+  ],
+  "PEERING_OBSERVERS": [
+    "Independent observers",
+    "Unabhängige Beobachter"
+  ],
+  "PEERING_COUNTS": [
+    "known / reported / reachable / verified",
+    "bekannt / gemeldet / erreichbar / überprüft"
+  ],
+  "PEERING_INSUFFICIENT": [
+    "There is not enough independent, current data for a reliable assessment. The score is shown for transparency only.",
+    "Es liegen nicht genug unabhängige, aktuelle Daten für eine belastbare Bewertung vor. Der Wert dient nur der Transparenz."
+  ],
+  "PEERING_NEXT_SYNC": [
+    "Next full sync",
+    "Nächster Vollsync"
+  ],
+  "PEERING_NEXT_CHECKPOINT": [
+    "Next checkpoint",
+    "Nächster Checkpoint"
+  ],
+  "PEERING_LAST_SYNC": [
+    "Last successful sync",
+    "Letzter erfolgreicher Sync"
+  ],
+  "PEERING_CONNECTION": [
+    "Connection to host",
+    "Verbindung zum Host"
+  ],
+  "PEERING_ACTIVE_SINCE": [
+    "Active since",
+    "Aktiv seit"
+  ],
+  "PEERING_STALE_NOTE": [
+    "A checkpoint that is not \"verified\" was computed over the last verified state and is labelled accordingly.",
+    "Ein Checkpoint, der nicht „verified“ ist, wurde über den letzten verifizierten Stand berechnet und ist entsprechend gekennzeichnet."
+  ],
+  "PEERING_MISSING_SINCE": [
+    "missing since",
+    "fehlt seit"
+  ],
+  "PEERING_STATE_CONNECTED": [
+    "connected",
+    "verbunden"
+  ],
+  "PEERING_STATE_REACHABLE": [
+    "reachable",
+    "erreichbar"
+  ],
+  "PEERING_STATE_UNREACHABLE": [
+    "unreachable",
+    "nicht erreichbar"
+  ],
+  "PEERING_STATE_UNCHECKED": [
+    "unchecked",
+    "ungeprüft"
+  ],
+  "PEERING_STATE_OPEN": [
+    "open",
+    "offen"
+  ],
+  "PEERING_SELF_CHECK_FAILED": [
+    "FAILED",
+    "FEHLGESCHLAGEN"
+  ],
+  "PEERING_COL_SIGNAL": [
+    "signal",
+    "Signal"
+  ],
+  "PEERING_COL_VALUE": [
+    "value",
+    "Wert"
+  ],
+  "PEERING_COL_SEVERITY": [
+    "severity",
+    "Schwere"
+  ],
+  "PEERING_COL_SOURCE": [
+    "source",
+    "Quelle"
+  ],
+  "PEERING_COL_STATE": [
+    "state",
+    "Zustand"
+  ],
+  "PEERING_COL_OBSERVED": [
+    "observed",
+    "beobachtet"
+  ],
+  "PEERING_COL_URL": [
+    "url",
+    "URL"
+  ],
+  "PEERING_COL_IDENTITY": [
+    "identity",
+    "Identität"
+  ],
+  "PEERING_COL_LEDGER": [
+    "ledger",
+    "Ledger"
+  ],
+  "PEERING_COL_LAST_SEEN": [
+    "last seen",
+    "zuletzt gesehen"
+  ],
+  "PEERING_COL_ID": [
+    "id",
+    "ID"
+  ],
+  "PEERING_COL_PROVIDER": [
+    "provider",
+    "Anbieter"
+  ],
+  "PEERING_COL_TYPE": [
+    "type",
+    "Typ"
+  ],
+  "PEERING_COL_SERVED": [
+    "served",
+    "ausgeliefert"
+  ],
+  "PEERING_COL_LATEST": [
+    "latest",
+    "neueste"
+  ],
+  "PEERING_COL_HASH": [
+    "hash",
+    "Hash"
+  ],
+  "PEERING_COL_CHAIN": [
+    "chain",
+    "Kette"
+  ],
+  "PEERING_COL_CONFIRMED": [
+    "confirmed",
+    "bestätigt"
+  ],
+  "PEERING_COL_DAY": [
+    "day",
+    "Tag"
+  ],
+  "PEERING_COL_STATUS": [
+    "status",
+    "Status"
+  ],
+  "PEERING_COL_SIZE": [
+    "size",
+    "Größe"
+  ],
+  "PEERING_COL_LEDGER_ROOT": [
+    "ledger root",
+    "Ledger-Root"
+  ],
+  "PEERING_COL_STATE_ROOT": [
+    "state root",
+    "State-Root"
+  ],
+  "PEERING_COL_COMPUTED": [
+    "computed",
+    "berechnet"
+  ],
+  "PEERING_COL_NODE": [
+    "node",
+    "Knoten"
+  ],
+  "PEERING_COL_ROLE": [
+    "role",
+    "Rolle"
+  ],
+  "PEERING_COL_ROOT": [
+    "root",
+    "Root"
+  ],
+  "PEERING_COL_VERDICT": [
+    "verdict",
+    "Ergebnis"
+  ],
+  "PEERING_COL_VIA": [
+    "via",
+    "über"
+  ],
+  "PEERING_COL_KIND": [
+    "kind",
+    "Art"
+  ],
+  "PEERING_COL_TO": [
+    "to",
+    "bis"
+  ],
+  "PEERING_COL_ERROR": [
+    "error",
+    "Fehler"
+  ],
+  "PEERING_COL_FINISHED": [
+    "finished",
+    "beendet"
+  ],
+  "PEERING_COL_TARGET": [
+    "target",
+    "Ziel"
+  ],
+  "PEERING_COL_RATIOS": [
+    "24h / 7d / 30d",
+    "24 h / 7 T / 30 T"
+  ],
+  "PEERING_COL_OUTAGES": [
+    "outages",
+    "Ausfälle"
+  ],
+  "PEERING_COL_SUMMARY": [
+    "summary",
+    "Zusammenfassung"
+  ],
+  "PEERING_COL_DETECTED": [
+    "detected",
+    "erkannt"
+  ],
+  "PEERING_ROW_HOST": [
+    "host",
+    "Host"
+  ],
+  "PEERING_ROW_UPTIME": [
+    "uptime",
+    "Uptime"
+  ],
+  "PEERING_ROW_HOST_KEY": [
+    "host key",
+    "Host-Schlüssel"
+  ],
+  "PEERING_ROW_SELF_CHECK": [
+    "self-check",
+    "Selbstprüfung"
+  ]
+}

@@ -1,0 +1,45 @@
+[project]
+name = "wf-peering"
+version = "1.0a1"
+description = "Shared node core of the WebFluid peering network: identity, signed ledger, verification, checkpoints and trust assessment for hosts and peers."
+authors = [
+    { name = "Pierre", email = "pierre@growv-mail.org" }
+]
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = ["webfluid>=1.0.0b3"]
+
+[project.entry-points."webfluid.extensions"]
+peering = "wf_peering.extension:Peering"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+wf_peering = [
+    "static/**/*",
+    "templates/**/*",
+    "i18n/*.json"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+filterwarnings = ["ignore::DeprecationWarning"]

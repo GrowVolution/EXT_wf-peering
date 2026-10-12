@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ _("PEERING_PAGE_TITLE") }}</title>
+    <link rel="stylesheet" href="{{ static }}/css/status.css">
+    <script type="application/json" id="peering-texts">{{ texts | tojson }}</script>
+    <script src="{{ static }}/js/trust.js" defer></script>
+    <script src="{{ static }}/js/status.js" defer></script>
+</head>
+<body>
+<main id="peering-status" class="page" data-api="{{ api }}" data-role="{{ role }}" data-node="{{ node }}" data-host="{{ host }}">
+    <header class="hero">
+        <div>
+            <p class="eyebrow">{{ _("PEERING_TITLE_" ~ (role | upper)) }}</p>
+            <h1 id="hero-title">{{ host }}</h1>
+            <p class="muted" id="hero-node">{{ _("PEERING_NODE_LABEL", node=node) }}</p>
+        </div>
+        <div class="score" id="score" aria-live="polite">
+            <span class="score-value" id="score-value">…</span>
+            <span class="score-label" id="score-label">{{ _("PEERING_LOADING") }}</span>
+        </div>
+    </header>
+    <p class="notice">{{ _("PEERING_DISCLAIMER") }}</p>
+    {% if debug %}<p class="notice">{{ _("PEERING_DEBUG_NOTE") }}</p>{% endif %}
+    <noscript><p class="notice">{{ _("PEERING_NOSCRIPT") }}</p></noscript>
+    <section id="sections" class="grid"></section>
+</main>
+</body>
+</html>
