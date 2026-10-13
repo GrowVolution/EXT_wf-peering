@@ -23,12 +23,16 @@ peer app runs without `WF_ADDITIVES`.
 |-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `wf_peering.protocol`   | Pure, I/O-free protocol code: canonical JSON, Merkle trees and proofs, ledger entries, key log, signed actions, integrity records, network policy, trust scoring, handshake contexts.                     |
 | `wf_peering.models`     | The SQLAlchemy models (`peering_*` tables) both roles store their state in.                                                                                                                               |
-| `wf_peering.services`   | Node identity, the signed ledger (`append` on the host, `ingest` on a peer), journal, account replay, integrity storage, network checks, peer directory, uptime, checkpoints, trust, status, shared jobs. |
+| `wf_peering.services`   | Node identity, the signed ledger (`append` on the host, `ingest` on a peer), journal, account replay, integrity storage, peer directory, uptime, checkpoints, trust, status.                               |
+| `wf_peering.utils`      | `netcheck`: fetching and inspecting a remote origin under the network policy (DNS pinning, TLS, size limits).                                                                                             |
+| `wf_peering.settings`   | The `PEERING_*` settings of the process (`settings`, `configure`) and the protocol constants (`HOST_API`, `PEER_API`, `HOST_SOCKET`, versions).                                                           |
+| `wf_peering.role`       | `NodeRole`, the seam between host and peer, and the role the extension was expanded with.                                                                                                                 |
+| `wf_peering.jobs`       | The shared jobs (startup, heartbeat, probes, trust, ledger verification, activity, retention, checkpoint) and `guarded`, which an application wraps its own jobs in.                                        |
 | `wf_peering.api`        | The public, read-only API handlers both roles serve, and `register()` to mount them on a router.                                                                                                          |
 | `static/`, `templates/` | The status page both roles render (`/wf-peering/static/…`).                                                                                                                                               |
 
 Everything that differs between host and peer is behind one interface, `NodeRole`
-(`wf_peering.services.role`): the startup work, where a checkpoint's ledger size comes from and where it is
+(`wf_peering.role`): the startup work, where a checkpoint's ledger size comes from and where it is
 published, the signals only one side can observe, the extra status fields. The Additive implements it as
 `HostRole`, the peer app as `PeerRole`; the shared services never import either side.
 
@@ -136,12 +140,19 @@ lone surrogates rejected. Python, the users Additive's `e2ee.js` and the Users S
 | `wf-checkpoint-v1`                                            | A daily checkpoint: ledger size/root/head, replayed state root, journal root, sync basis, previous checkpoint.  |
 | `wf-trust-v1`                                                 | A trust report with all signals, its basis and the observer population.                                         |
 | `wf-peer-hello-v1` / `wf-peer-auth-v1` / `wf-peer-welcome-v1` | The mutual WebSocket handshake between host and peer.                                                           |
-| `wf-keylog-v1:subject` / `wf-keylog-v1:authority`             | Account key statements (device and browser binding, recovery, revocation).                                      |
+| `wf-keylog-v1:subject` / `wf-keylog-v1:authority`             | Account key statements (device and browser binding, browser links, recovery, revocation).                       |
 | `wf-action-v1`                                                | Signed user actions with replay protection (`seq`, `prev`, lifetime ≤ 900 s).                                   |
 
 Peers replay the key log and the signed actions of every account from the ledger themselves and reach the
 same state as the host — or flag where they do not. Key changes the host asserts without a proof by the
 account's own keys are recorded with the flag `NO_PROOF_OF_POSSESSION`.
+
+Browser links (`browser.link`, `browser.unlink`) carry only the browser's X25519 key and an authority
+signature: a link needs the account's device or recovery key, a release may also come from the host
+(`HOST_ASSERTED_UNLINK`, normal — releasing grants nothing), while a link the host asserts is critical
+(`HOST_ASSERTED_LINK`). The replayed state lists the linked keys as `links`; a device bound by the
+recovery key or the host and a revoked device drop them. A host `device.revoke` with `reset: true`
+closes an account even when no device is bound.
 
 ---
 

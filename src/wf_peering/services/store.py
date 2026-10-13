@@ -38,7 +38,7 @@ class State:
 class Conflicts:
     @staticmethod
     def _signal(data: dict):
-        from .role import current
+        from ..role import current
         try: current().alert(data)
         except Exception as exc: log_factory.exception(exc, "[peering] Forwarding a conflict alert failed.")
 

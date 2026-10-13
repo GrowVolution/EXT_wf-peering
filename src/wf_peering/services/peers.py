@@ -6,9 +6,9 @@ from ..models.peers import Peer, PeerConnection, Probe
 from ..protocol.entries import utc_now, to_ts
 from ..protocol.netpolicy import PolicyError, parse_target
 from ..protocol.signing import verify, fingerprint, valid_ed25519
-from . import netcheck
+from ..settings import settings
+from ..utils import netcheck
 from .identity import NODE_CONTEXT
-from .settings import settings
 from .store import dumps, loads, Conflicts
 
 SOURCES = ("connected", "host-reported", "config", "gossip", "self")

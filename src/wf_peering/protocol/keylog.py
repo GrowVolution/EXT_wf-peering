@@ -9,7 +9,9 @@ SUBJECT_CONTEXT = "wf-keylog-v1:subject"
 AUTHORITY_CONTEXT = "wf-keylog-v1:authority"
 GENESIS = "0" * 64
 
-TYPES = ("device.bind", "device.revoke", "recovery.set", "browser.bind", "browser.revoke")
+TYPES = ("device.bind", "device.revoke", "recovery.set", "browser.bind", "browser.revoke", "browser.link",
+         "browser.unlink")
+REQUIRES_AUTHORITY = ("device.revoke", "browser.revoke", "browser.link", "browser.unlink")
 AUTHORITIES = ("self", "device", "recovery", "host", "legacy")
 
 _HANDLE = re.compile(r"^a1\.[A-Za-z0-9_-]{22}$")
@@ -47,6 +49,7 @@ class AccountKeys:
     device: dict | None = None
     recovery: str | None = None
     browsers: list = field(default_factory=list)
+    links: list = field(default_factory=list)
     broken: bool = False
     flags: list = field(default_factory=list)
 
@@ -67,6 +70,7 @@ class AccountKeys:
             "device_fingerprint": self.device_fingerprint,
             "recovery": self.recovery,
             "browsers": list(self.browsers),
+            "links": list(self.links),
             "broken": self.broken,
             "flags": [flag.to_dict() for flag in self.flags]
         }
@@ -76,7 +80,8 @@ class AccountKeys:
         return cls(
             handle=data["account"], seq=data["seq"], head=data["head"],
             device=data.get("device"), recovery=data.get("recovery"),
-            browsers=list(data.get("browsers") or []), broken=bool(data.get("broken")),
+            browsers=list(data.get("browsers") or []), links=list(data.get("links") or []),
+            broken=bool(data.get("broken")),
             flags=[Flag(**flag) for flag in data.get("flags") or []]
         )
 
@@ -165,8 +170,18 @@ def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
     elif kind == "device.revoke":
         if keys and set(keys) != { "sig" }:
             flags.append(Flag("INVALID_KEY_MATERIAL", "critical"))
-        if not state.device:
+        if not state.device and not statement.get("reset"):
             flags.append(Flag("NOTHING_TO_REVOKE", "high"))
+    elif kind == "browser.link":
+        if not valid_x25519(keys.get("enc")) or set(keys) != { "enc" }:
+            flags.append(Flag("INVALID_KEY_MATERIAL", "critical"))
+        elif keys["enc"] in state.links:
+            flags.append(Flag("LINK_EXISTS", "high"))
+        if not state.device:
+            flags.append(Flag("LINK_WITHOUT_DEVICE", "high"))
+    elif kind == "browser.unlink":
+        if set(keys) != { "enc" } or keys.get("enc") not in state.links:
+            flags.append(Flag("UNKNOWN_LINK_KEY", "high"))
 
     if any(flag.severity == "critical" for flag in flags):
         return Verdict(False, False, flags), _broken(state, flags)
@@ -186,7 +201,7 @@ def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
         if state.anchored:
             flags.append(Flag("SELF_AUTHORITY_ON_ANCHORED_ACCOUNT", "critical"))
             return Verdict(False, False, flags), _broken(state, flags)
-        if kind in ("device.revoke", "browser.revoke"):
+        if kind in REQUIRES_AUTHORITY:
             flags.append(Flag("SELF_AUTHORITY_NOT_ALLOWED", "critical"))
             return Verdict(False, False, flags), _broken(state, flags)
     elif authority in ("device", "recovery"):
@@ -203,7 +218,11 @@ def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
             return Verdict(False, False, flags), _broken(state, flags)
         flags.append(Flag("LEGACY_IMPORT", "normal"))
     elif authority == "host":
-        if state.anchored and not statement.get("reset"):
+        if kind == "browser.unlink":
+            flags.append(Flag("HOST_ASSERTED_UNLINK", "normal"))
+        elif kind == "browser.link":
+            flags.append(Flag("HOST_ASSERTED_LINK", "critical"))
+        elif state.anchored and not statement.get("reset"):
             flags.append(Flag("HOST_ASSERTED_KEY_CHANGE", "critical"))
         elif state.anchored:
             flags.append(Flag("HOST_ASSERTED_RESET", "high"))
@@ -216,24 +235,31 @@ def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
     nxt = AccountKeys(
         handle=state.handle, seq=statement["seq"], head=own_hash,
         device=dict(state.device) if state.device else None,
-        recovery=state.recovery, browsers=list(state.browsers),
+        recovery=state.recovery, browsers=list(state.browsers), links=list(state.links),
         flags=list(state.flags) + flags
     )
     if statement.get("reset") and authority == "host":
         nxt.recovery = None
         nxt.browsers = []
+        nxt.links = []
     if kind == "device.bind":
         nxt.device = { "sig": keys["sig"], "enc": keys["enc"] }
-        if state.device is None or state.device["sig"] != keys["sig"]:
-            nxt.browsers = [] if authority in ("recovery", "host") else nxt.browsers
+        if (state.device is None or state.device["sig"] != keys["sig"]) and authority in ("recovery", "host"):
+            nxt.browsers = []
+            nxt.links = []
     elif kind == "device.revoke":
         nxt.device = None
+        nxt.links = []
     elif kind == "recovery.set":
         nxt.recovery = keys["recovery"]
     elif kind == "browser.bind":
         if keys["enc"] not in nxt.browsers: nxt.browsers.append(keys["enc"])
     elif kind == "browser.revoke":
         nxt.browsers = [key for key in nxt.browsers if key != keys.get("enc")]
+    elif kind == "browser.link":
+        if keys["enc"] not in nxt.links: nxt.links.append(keys["enc"])
+    elif kind == "browser.unlink":
+        nxt.links = [key for key in nxt.links if key != keys.get("enc")]
 
     return Verdict(True, True, flags), nxt
 
@@ -241,7 +267,7 @@ def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
 def _broken(state: AccountKeys, flags: list) -> AccountKeys:
     return AccountKeys(
         handle=state.handle, seq=state.seq, head=state.head,
-        device=state.device, recovery=state.recovery, browsers=list(state.browsers),
+        device=state.device, recovery=state.recovery, browsers=list(state.browsers), links=list(state.links),
         broken=True, flags=list(state.flags) + flags
     )
 

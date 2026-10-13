@@ -36,7 +36,7 @@ def counted(path: str, handler):
 
     @wraps(handler)
     async def wrapper(*args, **kwargs):
-        from ..services.tasks import Activity
+        from ..jobs import Activity
         Activity.count(group)
         return await handler(*args, **kwargs)
     return wrapper

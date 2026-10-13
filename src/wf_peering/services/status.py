@@ -1,13 +1,13 @@
 from datetime import datetime, timedelta, UTC
 
 from ..protocol.entries import utc_now, to_ts
+from ..role import current as role
+from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 from .checkpoints import Checkpoints
 from .identity import NodeIdentity
 from .integrity import Integrity
 from .ledger import Ledger
 from .peers import Peers
-from .role import current as role
-from .settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 from .store import Conflicts, State
 from .uptime import Uptime
 

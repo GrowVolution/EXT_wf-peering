@@ -207,6 +207,53 @@ def test_legacy_genesis_and_browser_binding():
     assert verdicts[-1].valid and state.browsers == [] and state.device["sig"] == device.public_key
 
 
+def test_links_need_the_device_and_the_host_may_only_release_them():
+    account = Account()
+    device, recovery = Signer.generate(), Signer.generate()
+    browser = x25519_pub()
+    account.add(account.statement("device.bind", "self", device_keys(device)), subject=device)
+    account.add(account.statement("browser.link", "device", {"enc": browser}), authority=device)
+    state, verdicts = keylog.replay(HANDLE, account.envelopes)
+    assert verdicts[-1].valid and not verdicts[-1].flags and state.links == [browser]
+    assert state.to_dict()["links"] == [browser] and keylog.AccountKeys.from_dict(state.to_dict()).links == [browser]
+
+    account.add(account.statement("browser.unlink", "host", {"enc": browser}))
+    state, verdicts = keylog.replay(HANDLE, account.envelopes)
+    assert verdicts[-1].valid and [f.code for f in verdicts[-1].flags] == ["HOST_ASSERTED_UNLINK"]
+    assert verdicts[-1].flags[0].severity == "normal" and state.links == []
+
+    hostile = Account()
+    hostile.add(hostile.statement("device.bind", "self", device_keys(device)), subject=device)
+    hostile.add(hostile.statement("browser.link", "host", {"enc": browser}))
+    _, verdicts = keylog.replay(HANDLE, hostile.envelopes)
+    assert verdicts[-1].flags[0].code == "HOST_ASSERTED_LINK" and verdicts[-1].flags[0].severity == "critical"
+
+    selfish = Account()
+    selfish.add(selfish.statement("device.bind", "self", device_keys(device)), subject=device)
+    selfish.add(selfish.statement("browser.link", "self", {"enc": browser}))
+    _, verdicts = keylog.replay(HANDLE, selfish.envelopes)
+    assert not verdicts[-1].valid and verdicts[-1].flags[0].code.startswith("SELF_AUTHORITY")
+
+    lost = Account()
+    lost.add(lost.statement("device.bind", "self", device_keys(device)), subject=device)
+    lost.add(lost.statement("recovery.set", "device", {"recovery": recovery.public_key}), subject=recovery, authority=device)
+    lost.add(lost.statement("browser.link", "device", {"enc": browser}), authority=device)
+    successor = Signer.generate()
+    lost.add(lost.statement("device.bind", "recovery", device_keys(successor)), subject=successor, authority=recovery)
+    state, verdicts = keylog.replay(HANDLE, lost.envelopes)
+    assert all(v.valid for v in verdicts) and state.links == []
+
+
+def test_a_host_reset_closes_an_account_without_a_device():
+    account = Account()
+    recovery = Signer.generate()
+    account.add(account.statement("recovery.set", "self", {"recovery": recovery.public_key}), subject=recovery)
+    account.add(account.statement("device.revoke", "host", {}, reset=True))
+    state, verdicts = keylog.replay(HANDLE, account.envelopes)
+    assert verdicts[-1].valid and [f.code for f in verdicts[-1].flags] == ["HOST_ASSERTED_RESET"]
+    assert state.recovery is None and not state.anchored
+
+
 
 def make_action(signer, seq, prev, params, action_id=None, target="users:profile", iat=1760000000):
     return {"v": 1, "account": HANDLE, "device": fingerprint(signer.public_key), "action": "users:profile.set",

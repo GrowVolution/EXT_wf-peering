@@ -8,9 +8,9 @@ from ..models.ledger import LedgerEntry
 from ..protocol import entries
 from ..protocol.canonical import canonical_text, CanonicalError
 from ..protocol.merkle import root, inclusion_proof, consistency_proof
+from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 from . import accounts
 from .identity import NodeIdentity
-from .settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 from .store import dumps, loads, Conflicts, State
 
 

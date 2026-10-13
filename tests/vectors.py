@@ -2,9 +2,7 @@ import hashlib, json, sys
 from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from wf_peering.protocol import actions, keylog
 from wf_peering.protocol.canonical import canonical_text, digest

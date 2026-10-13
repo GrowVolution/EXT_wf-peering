@@ -22,6 +22,13 @@ First version, extracted from the `peering` Additive so that the host (Additive)
 - Peers without contact for `PEERING_PEER_INACTIVE_DAYS` days (30; `0` turns it off) become inactive and
   leave `GET /peers`, the status counts and the trust population; they are re-checked daily, come back on
   the next contact, and every expiry is journaled as `peering:peers-inactive`.
+- Key log: `browser.link` and `browser.unlink` with the replayed `links`, `HOST_ASSERTED_LINK` (critical) and
+  `HOST_ASSERTED_UNLINK` (normal); `self` may not link or unlink; links end with a device bound by recovery
+  or the host and with `device.revoke`. A `device.revoke` with `reset: true` is valid without a bound device.
+- Layout: the settings, `NodeRole` and the shared jobs are modules of their own (`wf_peering.settings`,
+  `wf_peering.role`, `wf_peering.jobs`, the latter formerly `services/tasks.py`), and the network checks
+  moved to `wf_peering.utils.netcheck`; `services/` keeps the stateful parts. The package's `__all__` is
+  unchanged.
 - Pushed integrity records (`Integrity.push_id`, `Integrity.retract`): appended when an artifact changes,
   never marked missing by an integrity run, retracted only by their owner. Records with `served: false`
   are listed separately on the status page.

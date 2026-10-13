@@ -4,7 +4,7 @@ from .utils import public
 
 async def peers_request(request: Request):
     from ..services.peers import Peers, serialize
-    from ..services.settings import settings
+    from ..settings import settings
     from ..services.identity import NodeIdentity
     peers = []
     for row in await Peers.all(False):

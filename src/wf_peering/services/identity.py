@@ -1,9 +1,9 @@
 from pathlib import Path
 import os, secrets, time
 
-from ..protocol.signing import Signer, b64decode, b64encode
 from ..protocol.entries import utc_now
-from .settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
+from ..protocol.signing import Signer, b64decode, b64encode
+from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 
 NODE_CONTEXT = "wf-peering-node-v1"
 
@@ -59,7 +59,7 @@ class NodeIdentity:
 
     @classmethod
     def statement(cls) -> dict:
-        from .role import current
+        from ..role import current
         return {
             "node": cls.node_id(),
             "key": cls.public_key(),

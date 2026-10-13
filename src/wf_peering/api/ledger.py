@@ -8,7 +8,7 @@ MAX_PAGE_BYTES = 4 * 1024 * 1024
 
 async def ledger_request(request: Request):
     from ..services.ledger import Ledger
-    from ..services.settings import settings
+    from ..settings import settings
     query = request.query_params
     start = bounded(query.get("from"), 1, 1, 2 ** 53 - 1)
     limit = bounded(query.get("limit"), 100, 1, settings.ledger_page)

@@ -9,12 +9,12 @@ from ..protocol import trust as score
 from ..protocol.entries import utc_now, to_ts
 from ..protocol.netpolicy import clusters, parse_target, PolicyError
 from ..protocol.trust import Signal
+from ..role import current as role
+from ..settings import settings
 from . import accounts
 from .checkpoints import Checkpoints
 from .identity import NodeIdentity
 from .peers import Peers, serialize as serialize_peer
-from .role import current as role
-from .settings import settings
 from .store import State, loads, dumps
 from .uptime import Uptime
 

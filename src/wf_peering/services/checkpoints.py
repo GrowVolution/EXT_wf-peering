@@ -11,11 +11,11 @@ from ..protocol import entries, keylog, actions, integrity as spec
 from ..protocol.canonical import canonical, canonical_text, digest
 from ..protocol.merkle import leaf_hash, root
 from ..protocol.signing import verify, fingerprint, valid_ed25519
+from ..role import current as role
+from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 from .identity import NodeIdentity
 from .journal import Journal
 from .ledger import Ledger
-from .settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
-from .role import current as role
 from .store import Conflicts
 
 CONTEXT = "wf-checkpoint-v1"

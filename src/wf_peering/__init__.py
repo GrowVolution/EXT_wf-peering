@@ -4,8 +4,8 @@ try: __version__ = _version("wf-peering")
 except PackageNotFoundError: __version__ = "0+unknown"
 
 from .extension import Peering, peering, ASSETS
-from .services.role import NodeRole
-from .services.settings import HOST_API, PEER_API, HOST_SOCKET, PROTOCOL_VERSION, SCHEMA_VERSION
+from .role import NodeRole
+from .settings import HOST_API, PEER_API, HOST_SOCKET, PROTOCOL_VERSION, SCHEMA_VERSION
 
 __all__ = [
     "Peering", "peering", "NodeRole", "ASSETS",

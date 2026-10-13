@@ -2,10 +2,10 @@ from webfluid.utils.logging import factory as log_factory
 from datetime import datetime, timedelta, UTC
 import asyncio
 
-from ..protocol.entries import utc_now
+from .protocol.entries import utc_now
 from .role import current as role
+from .services.store import State
 from .settings import settings, PEER_API
-from .store import State
 
 
 def guarded(name: str):
@@ -23,9 +23,9 @@ def guarded(name: str):
 
 @guarded("startup")
 async def startup():
-    from .uptime import Uptime
-    from .peers import Peers
-    from .checkpoints import Checkpoints
+    from .services.uptime import Uptime
+    from .services.peers import Peers
+    from .services.checkpoints import Checkpoints
 
     await Uptime.boot()
     await Peers.reset_connections(role().live_connections())
@@ -39,16 +39,16 @@ async def startup():
 
 @guarded("heartbeat")
 async def heartbeat():
-    from .uptime import Uptime
+    from .services.uptime import Uptime
     await Uptime.beat()
     await role().heartbeat()
 
 
 @guarded("probes")
 async def probes():
-    from .peers import Peers, check_node, normalize_url
-    from . import netcheck
-    from .checkpoints import Checkpoints
+    from .services.peers import Peers, check_node, normalize_url
+    from .utils import netcheck
+    from .services.checkpoints import Checkpoints
 
     try:
         await State.set("self_check", await netcheck.inspect(settings.origin))
@@ -89,15 +89,15 @@ async def probes():
 
 @guarded("verify")
 async def verify():
-    from .ledger import Ledger
-    from .journal import Journal
+    from .services.ledger import Ledger
+    from .services.journal import Journal
     key = await Ledger.host_key()
     report = await Ledger.verify(key)
     journal = await Journal.verify()
     await State.set("ledger_verification", dict(report, journal_problems=journal[:20],
                                                 journal_valid=not journal, checked_at=utc_now()))
     if not report["valid"] or journal:
-        from .store import Conflicts
+        from .services.store import Conflicts
         await Conflicts.record("local-store-invalid", "critical",
                                "The stored ledger or journal failed its own verification.",
                                { "ledger": report["problems"][:20], "journal": journal[:20] },
@@ -106,20 +106,20 @@ async def verify():
 
 @guarded("trust")
 async def trust():
-    from .trust import Trust
+    from .services.trust import Trust
     await Trust.assess()
 
 
 @guarded("checkpoint")
 async def checkpoint():
-    from .checkpoints import Checkpoints
+    from .services.checkpoints import Checkpoints
     await Checkpoints.compute()
 
 
 @guarded("retention")
 async def retention():
-    from .peers import Peers, check_node
-    from .trust import Trust
+    from .services.peers import Peers, check_node
+    from .services.trust import Trust
     await Peers.prune_probes()
     await Trust.prune()
     await Peers.expire()
@@ -143,7 +143,7 @@ class Activity:
 
 @guarded("activity")
 async def activity():
-    from .journal import Journal
+    from .services.journal import Journal
     counts = Activity.drain()
     if counts: await Journal.append("peering:activity", { "rest": counts, "until": utc_now() })
 

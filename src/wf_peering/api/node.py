@@ -14,7 +14,7 @@ async def status_request(request: Request):
 
 async def uptime_request(request: Request):
     from ..services.uptime import Uptime
-    from ..services.settings import settings
+    from ..settings import settings
     from ..services.peers import Peers
     data = { "self": await Uptime.own() }
     target = settings.host if settings.is_peer else None

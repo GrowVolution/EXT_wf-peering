@@ -21,7 +21,7 @@ class Peering(FluidExtension):
         super().__init__(fluid, *args, **kwargs)
 
     def expand_fluid(self, fluid, role=None, root=None, *_, **__):
-        from .services.role import NodeRole, use
+        from .role import NodeRole, use
 
         if self._fluid is not None:
             if self._fluid is fluid and role in (None, self._role): return
@@ -35,7 +35,7 @@ class Peering(FluidExtension):
         if not enabled("EXT_BABEL"):
             raise FrameworkException(f"EXT_BABEL is required for {EXT_ID} to work.")
 
-        from .services.settings import configure
+        from .settings import configure
         settings = configure(fluid.config, role.name, Path(root) if root else Path(fluid.project_root))
         use(role)
 
@@ -59,7 +59,7 @@ class Peering(FluidExtension):
         if settings.schedule:
             if not enabled("EXT_SCHEDULING"):
                 raise FrameworkException(f"EXT_SCHEDULING is required for {EXT_ID}, or set PEERING_SCHEDULE = False.")
-            from .services.tasks import schedule
+            from .jobs import schedule
             schedule()
 
         self._fluid = fluid
@@ -70,7 +70,7 @@ class Peering(FluidExtension):
         from webfluid.core.ext import babel
         from webfluid.extensions.babel import get_locale
         from .services.identity import NodeIdentity
-        from .services.settings import settings
+        from .settings import settings
         texts = { key.removeprefix(I18N_PREFIX): await babel.agettext(key) for key in self._texts }
         return await self._fluid.render(
             f"{PREFIX}/status.html", role=settings.role, node=NodeIdentity.node_id(), host=settings.assessed,

@@ -5,7 +5,7 @@ import asyncio, hashlib, json, socket, ssl, time
 import httpx
 
 from ..protocol.netpolicy import Target, PolicyError, parse_target, address_allowed
-from .settings import settings
+from ..settings import settings
 
 USER_AGENT = "webfluid-peering/1"
 CONCURRENCY = 8

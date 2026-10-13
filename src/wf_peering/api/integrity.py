@@ -8,7 +8,7 @@ _ID = re.compile(r"^[a-z0-9][a-z0-9_.:-]{1,127}$")
 
 async def integrity_request(request: Request):
     from ..services.integrity import Integrity
-    from ..services.settings import settings
+    from ..settings import settings
     return public({
         "source": "host-ledger" if settings.is_peer else "providers",
         "groups": await Integrity.current(),
@@ -18,7 +18,7 @@ async def integrity_request(request: Request):
 
 async def hash_request(request: Request):
     from ..services.integrity import Integrity
-    from ..services.settings import settings
+    from ..settings import settings
     artifact = request.query_params.get("id")
     if not isinstance(artifact, str) or not _ID.match(artifact): return error("INVALID_ID")
     latest = await Integrity.latest(artifact)
@@ -38,7 +38,7 @@ async def hash_request(request: Request):
         "record": record,
         "source": "host-ledger" if settings.is_peer else "providers"
     }
-    from ..services.role import current as role
+    from ..role import current as role
     observation = await role().observation(artifact)
     if observation is not None or settings.is_peer: data["observation"] = observation
     return public(data)
