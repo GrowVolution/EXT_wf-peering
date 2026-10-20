@@ -81,9 +81,16 @@ into the page as JSON (`#peering-texts`). An application offers German by listin
 Under `wf run -d` (`DEBUG_MODE`) the extension behaves as if `PEERING_ALLOW_INSECURE` were set — a host and
 its peers can run on `http://localhost` without `HTTPS_REQUIRED` failures — and the trust assessment leaves
 out the `https`, `tls_valid` and `cert_expiry_margin` signals instead of capping the score. Every signed
-trust report carries `debug: true` or `false`, and the status page shows a notice, so a report from a
-debug node is never mistaken for a production one. Debug never reaches a deployment: `wf run` sets
-`DEBUG_MODE` only with `-d`.
+trust report carries `debug: true` or `false`, and so does `GET /status`; the status page shows a notice,
+so a report from a debug node is never mistaken for a production one. Browser checks of the host use the
+`debug` of `/status` for one thing only: a page on a loopback address may then stand for the host's
+declared `url`, which is how a phone in the LAN and a browser on `localhost` test against the same host.
+Debug never reaches a deployment: `wf run` sets `DEBUG_MODE` only with `-d`.
+
+A peer that connects to a host names its public URL in the handshake. `services.peers.verify_claim(url,
+node)` fetches that URL's `/node` statement and answers `URL_UNREACHABLE`, `URL_NOT_VERIFIED` or `None`;
+the host role refuses the connection on any code, so only addresses that serve the connecting node are
+ever listed.
 
 ---
 

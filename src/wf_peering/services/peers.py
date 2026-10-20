@@ -1,6 +1,7 @@
 from webfluid.core.ext import db
 from sqlalchemy import select, func
 from datetime import datetime, timedelta, UTC
+import asyncio
 
 from ..models.peers import Peer, PeerConnection, Probe
 from ..protocol.entries import utc_now, to_ts
@@ -276,6 +277,23 @@ def verify_statement(data, expected_url: str | None = None) -> tuple[dict | None
     if expected_url is not None and normalize_url(statement.get("url") or "") != expected_url:
         return statement, "URL_MISMATCH"
     return statement, None
+
+
+async def _served_node(url: str) -> str | None:
+    try: status, data, _ = await netcheck.get_json(url, f"{settings.api_of(url)}/node", 64 * 1024)
+    except netcheck.CheckError: return None
+    if status != 200: return None
+    statement, problem = verify_statement(data, url)
+    return None if problem else statement.get("node")
+
+
+async def verify_claim(url: str, node_id: str) -> str | None:
+    target = normalize_url(url)
+    if target is None: return "INVALID_URL"
+    try: served = await asyncio.wait_for(_served_node(target), timeout=max(1, settings.timeout - 2))
+    except asyncio.TimeoutError: served = None
+    if served is None: return "URL_UNREACHABLE"
+    return None if served == node_id else "URL_NOT_VERIFIED"
 
 
 async def check_node(url: str) -> dict:

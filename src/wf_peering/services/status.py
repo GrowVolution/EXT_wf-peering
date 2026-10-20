@@ -42,6 +42,7 @@ async def summary() -> dict:
         "host": settings.assessed,
         "protocol": PROTOCOL_VERSION,
         "schema": SCHEMA_VERSION,
+        "debug": settings.debug,
         "now": utc_now(),
         "started_at": NodeIdentity.started_at,
         "uptime_seconds": NodeIdentity.uptime(),

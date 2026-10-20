@@ -154,7 +154,7 @@ def schedule():
     from apscheduler.triggers.date import DateTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 
-    scheduler.add_job(startup, DateTrigger(run_date=datetime.now(UTC) + timedelta(seconds=5)))
+    scheduler.add_job(startup, DateTrigger(run_date=datetime.now(UTC) + timedelta(seconds=5)), misfire_grace_time=None)
     scheduler.add_job(heartbeat, IntervalTrigger(seconds=60))
     scheduler.add_job(probes, IntervalTrigger(seconds=settings.probe_interval))
     scheduler.add_job(trust, IntervalTrigger(seconds=settings.trust_interval))

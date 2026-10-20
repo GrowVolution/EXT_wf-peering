@@ -32,3 +32,11 @@ First version, extracted from the `peering` Additive so that the host (Additive)
 - Pushed integrity records (`Integrity.push_id`, `Integrity.retract`): appended when an artifact changes,
   never marked missing by an integrity run, retracted only by their owner. Records with `served: false`
   are listed separately on the status page.
+- `GET /status` reports `debug`, so a browser check can tell a debug host whose page it may open on a
+  loopback address.
+- `services.peers.verify_claim(url, node)` checks that a peer's claimed URL serves that node's signed
+  statement; hosts refuse a peer connection with `URL_UNREACHABLE` or `URL_NOT_VERIFIED` otherwise.
+- The startup job is scheduled with `misfire_grace_time=None`. With APScheduler's default of one second
+  it was skipped on any host that needs more than a few seconds to enable its Additives, so the node
+  start, the connection reset, the checkpoint backfill, the role's startup and the first probes, ledger
+  verification and trust assessment never ran.
