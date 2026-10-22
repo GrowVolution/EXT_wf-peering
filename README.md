@@ -58,12 +58,12 @@ peering.expand_fluid(app, role=MyPeerRole())                       # a peer, e.g
 ```
 
 The extension is expanded with the role of the process that uses it; the settings, jobs, API and
-status page it brings are described in [CONTRACT.md](CONTRACT.md).
+status page it brings are described in [CONTRACT.md](src/wf_peering/CONTRACT.md).
 
 ## For developers and agents
 
-- [CONTRACT.md](CONTRACT.md) — expansion, settings, protocols, public API, trust, limits
-- [.agents/SKILL.md](.agents/SKILL.md) — what a coding agent needs to work on or with it
+- [CONTRACT.md](src/wf_peering/CONTRACT.md) — expansion, settings, protocols, public API, trust, limits
+- [.agents/SKILL.md](src/wf_peering/.agents/SKILL.md) — what a coding agent needs to work on or with it
 - [CHANGELOG.md](CHANGELOG.md) — what changed, version by version
 
 ---

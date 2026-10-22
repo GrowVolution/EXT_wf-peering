@@ -34,7 +34,9 @@ include-package-data = true
 wf_peering = [
     "static/**/*",
     "templates/**/*",
-    "i18n/*.json"
+    "i18n/*.json",
+    ".agents/*.md",
+    "CONTRACT.md"
 ]
 
 [tool.pytest.ini_options]

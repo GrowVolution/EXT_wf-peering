@@ -9,7 +9,7 @@ for it.
 
 This guide explains the ideas behind the protocol, how a process takes one of the two roles, what an
 operator configures, and what the network can and cannot prove. The exact settings, routes and
-signature contexts are in [CONTRACT.md](CONTRACT.md).
+signature contexts are in [CONTRACT.md](src/wf_peering/CONTRACT.md).
 
 ---
 
@@ -158,6 +158,6 @@ canonical JSON and signatures must reproduce byte for byte.
 
 ## Further reading
 
-- [CONTRACT.md](CONTRACT.md) — expansion, every setting, the signature contexts, the public API, limits
+- [CONTRACT.md](src/wf_peering/CONTRACT.md) — expansion, every setting, the signature contexts, the public API, limits
 - [CHANGELOG.md](CHANGELOG.md) — what changed, release by release
-- [.agents/SKILL.md](.agents/SKILL.md) — how a coding agent works on or with the extension
+- [.agents/SKILL.md](src/wf_peering/.agents/SKILL.md) — how a coding agent works on or with the extension

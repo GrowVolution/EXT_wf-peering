@@ -131,7 +131,7 @@ All signatures are Ed25519 over `"<context>\n" + canonical JSON` (or over a hash
 JSON is **WF-CJSON-1**: sorted ASCII keys, no whitespace, no floats, integers within ±(2^53−1), minimal
 escaping (`\b \f \n \r \t`, other control characters as lowercase `\u00XX`, everything else literal UTF-8),
 lone surrogates rejected. Every implementation, in any language, must produce identical bytes;
-`tests/vectors.py` produces the cross-language vectors to check one against.
+`../../tests/vectors.py` produces the cross-language vectors to check one against.
 
 | Context                                                       | Signs                                                                                                           |
 |---------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|

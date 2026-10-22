@@ -41,7 +41,7 @@ extension brings storage, jobs, the public API and the status page for that role
 
 ## Verify
 
-- `pytest` in `extensions/peering` runs the protocol tests; a role implementation tests its own side
+- `pytest` in `../../..` runs the protocol tests; a role implementation tests its own side
   in its own repository.
 - `GET /status` of a node shows its role, protocol and schema version, debug flag, ledger head and
   latest checkpoint.
