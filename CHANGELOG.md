@@ -2,8 +2,15 @@
 
 ## 1.0.0a1 — unreleased
 
-First version, extracted from the `peering` Additive so that the host (Additive) and the peer (the
-`peering` app) share one implementation instead of the peer running the host's Additive.
+First version: the node core both roles of the peering network run — protocols, storage,
+verification, checkpoints, the trust assessment and the public API handlers — in one package, so
+a host and its peers share one implementation.
+
+Requires WebFluid `1.0.0rc1`. The documentation is split by reader: `README.md` says what the
+extension is and why it exists, `DOCS.md` explains the protocol, the roles and the operation of a
+node to the people who run one, `CONTRACT.md` holds the integration surface — expansion, settings,
+protocols, public API, trust score, security notes and limits — and `.agents/SKILL.md` tells a
+coding agent how to work on it or with it. Nothing in the package's API changed with that split.
 
 - Protocols: WF-CJSON-1 canonical JSON, RFC 6962/9162 Merkle roots with inclusion and consistency proofs,
   signed ledger entries and heads, node journal, key log (`wf-keylog-v1`), signed actions (`wf-action-v1`),
