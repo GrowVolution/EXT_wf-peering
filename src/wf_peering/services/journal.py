@@ -2,16 +2,16 @@ from webfluid.core.ext import db
 from sqlalchemy import select, func
 import asyncio, json
 
-from ..models.ledger import JournalEntry
-from ..protocol import entries
-from ..protocol.canonical import canonical_text
-from ..protocol.merkle import root
-from .identity import NodeIdentity
+from wf_peering.models.ledger import JournalEntry
+from wf_peering.protocol import entries
+from wf_peering.protocol.canonical import canonical_text
+from wf_peering.protocol.merkle import root
+from wf_peering.services.identity import IdentityService
 
 SOURCE = "peering"
 
 
-class Journal:
+class JournalService:
     _lock: asyncio.Lock | None = None
 
     @classmethod
@@ -32,7 +32,7 @@ class Journal:
             seq, prev = await cls.head()
             content = entries.make(seq + 1, prev, kind, SOURCE, body, auth={ "type": "node" })
             value = entries.entry_hash(content)
-            signature = entries.sign_hash(NodeIdentity.signer, entries.JOURNAL_CONTEXT, value)
+            signature = entries.sign_hash(IdentityService.signer, entries.JOURNAL_CONTEXT, value)
             async with db.async_executor(model=JournalEntry) as e:
                 await e.insert(JournalEntry(
                     seq=seq + 1, hash=value, leaf=entries.entry_leaf(content), prev=prev,
@@ -79,14 +79,15 @@ class Journal:
     async def verify() -> list[str]:
         problems = []
         previous_seq, previous_hash = 0, entries.GENESIS
-        key = NodeIdentity.public_key()
+        key = IdentityService.public_key()
         async with db.async_executor(model=JournalEntry) as e:
             result = await e.exec(select(JournalEntry).order_by(JournalEntry.seq))
             for row in result.all():
                 content = json.loads(row.content)
                 if canonical_text(content) != row.content: problems.append(f"{row.seq}:NOT_CANONICAL")
                 if entries.entry_hash(content) != row.hash: problems.append(f"{row.seq}:HASH_MISMATCH")
-                problems.extend(f"{row.seq}:{issue}" for issue in entries.check_link(content, previous_hash, previous_seq))
+                problems.extend(f"{row.seq}:{issue}" for issue in entries.check_link(content, previous_hash,
+                                                                                     previous_seq))
                 if not entries.verify_hash(key, entries.JOURNAL_CONTEXT, row.hash, row.signature):
                     problems.append(f"{row.seq}:INVALID_SIGNATURE")
                 previous_seq, previous_hash = row.seq, row.hash

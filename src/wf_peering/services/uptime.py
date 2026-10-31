@@ -2,21 +2,21 @@ from webfluid.core.ext import db
 from sqlalchemy import select
 from datetime import datetime, timedelta, UTC
 
-from ..models.peers import Probe
-from ..protocol.entries import utc_now, to_ts, parse_ts
-from .identity import NodeIdentity
-from .store import State
+from wf_peering.models.peers import Probe
+from wf_peering.protocol.entries import utc_now, to_ts, parse_ts
+from wf_peering.services.identity import IdentityService
+from wf_peering.services.state import StateService
 
 GAP_TOLERANCE = 180
 
 
-class Uptime:
+class UptimeService:
     @staticmethod
     async def boot():
-        from .journal import Journal
-        previous = await State.get("heartbeat")
+        from wf_peering.services.journal import JournalService
+        previous = await StateService.get("heartbeat")
         now = utc_now()
-        if not await State.get("first_boot"): await State.set("first_boot", now)
+        if not await StateService.get("first_boot"): await StateService.set("first_boot", now)
         gap = None
         if previous and previous.get("ts"):
             try:
@@ -24,33 +24,33 @@ class Uptime:
                 if seconds > GAP_TOLERANCE: gap = { "from": previous["ts"], "to": now, "seconds": seconds }
             except ValueError: pass
 
-        downtimes = await State.get("downtimes", [])
+        downtimes = await StateService.get("downtimes", [])
         if gap:
             downtimes = (downtimes + [gap])[-500:]
-            await State.set("downtimes", downtimes)
-        await Journal.append("peering:node-start", {
-            "boot": NodeIdentity.boot_id,
+            await StateService.set("downtimes", downtimes)
+        await JournalService.append("peering:node-start", {
+            "boot": IdentityService.boot_id,
             "previous_boot": (previous or {}).get("boot"),
             "last_heartbeat": (previous or {}).get("ts"),
             "downtime": gap,
-            "key": NodeIdentity.public_key()
+            "key": IdentityService.public_key()
         })
-        await State.set("boots", ((await State.get("boots", [])) + [{
-            "boot": NodeIdentity.boot_id, "started_at": NodeIdentity.started_at, "after_gap": gap
+        await StateService.set("boots", ((await StateService.get("boots", [])) + [{
+            "boot": IdentityService.boot_id, "started_at": IdentityService.started_at, "after_gap": gap
         }])[-200:])
-        await Uptime.beat()
+        await UptimeService.beat()
 
     @staticmethod
     async def beat():
-        await State.set("heartbeat", { "ts": utc_now(), "boot": NodeIdentity.boot_id })
+        await StateService.set("heartbeat", { "ts": utc_now(), "boot": IdentityService.boot_id })
 
     @staticmethod
     async def own() -> dict:
-        downtimes = await State.get("downtimes", [])
-        boots = await State.get("boots", [])
+        downtimes = await StateService.get("downtimes", [])
+        boots = await StateService.get("boots", [])
         now = datetime.now(UTC)
-        report = { "boot": NodeIdentity.boot_id, "started_at": NodeIdentity.started_at,
-                   "uptime_seconds": NodeIdentity.uptime(), "restarts": boots[-20:],
+        report = { "boot": IdentityService.boot_id, "started_at": IdentityService.started_at,
+                   "uptime_seconds": IdentityService.uptime(), "restarts": boots[-20:],
                    "downtimes": downtimes[-50:], "source": "self-reported" }
         for name, days in (("24h", 1), ("7d", 7), ("30d", 30)):
             since = now - timedelta(days=days)
@@ -60,7 +60,7 @@ class Uptime:
                 except (KeyError, ValueError): continue
                 if end < since: continue
                 lost += (end - max(start, since)).total_seconds()
-            first = await State.get("first_boot")
+            first = await StateService.get("first_boot")
             window = (now - max(since, parse_ts(first))).total_seconds() if first else days * 86400
             report[f"ratio_{name}"] = round(100 * max(0.0, 1 - lost / window)) if window > 0 else None
         return report

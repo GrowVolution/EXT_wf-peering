@@ -1,27 +1,29 @@
 from webfluid.core.ext import db
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from datetime import datetime, timedelta, UTC
 import json
 
-from ..models.ledger import LedgerEntry
-from ..models.state import Conflict, TrustSnapshot
-from ..protocol import trust as score
-from ..protocol.entries import utc_now, to_ts
-from ..protocol.netpolicy import clusters, parse_target, PolicyError
-from ..protocol.trust import Signal
-from ..role import current as role
-from ..settings import settings
-from . import accounts
-from .checkpoints import Checkpoints
-from .identity import NodeIdentity
-from .peers import Peers, serialize as serialize_peer
-from .store import State, loads, dumps
-from .uptime import Uptime
+from wf_peering.exceptions import PolicyError
+from wf_peering.models.ledger import LedgerEntry
+from wf_peering.models.state import Conflict, TrustSnapshot
+from wf_peering.protocol import trust as score
+from wf_peering.protocol.entries import utc_now, to_ts
+from wf_peering.protocol.netpolicy import clusters, parse_target
+from wf_peering.protocol.trust import Signal
+from wf_peering.role import current as role
+from wf_peering.services.accounts import AccountService
+from wf_peering.services.checkpoints import CheckpointService
+from wf_peering.services.identity import IdentityService
+from wf_peering.services.peers import PeerService
+from wf_peering.services.state import StateService
+from wf_peering.services.uptime import UptimeService
+from wf_peering.settings import settings
+from wf_peering.utils.serialization import loads, dumps
 
-CONTEXT = "wf-trust-v1"
 HOUR = 3600
 DAY = 86400
 
+CONTEXT = "wf-trust-v1"
 EQUIVOCATION = ("host-equivocation", "host-history-truncated", "root-mismatch", "invalid-host-entry")
 
 
@@ -53,13 +55,14 @@ def _observer(name: str, check: dict | None, url: str | None, node_key: str | No
 
 
 async def _population() -> dict:
-    rows = await Peers.all()
-    host_check = await State.get("host_check") or {}
-    observers = { "self": _observer("self", await State.get("self_check"), settings.origin, NodeIdentity.public_key()) }
+    rows = await PeerService.all()
+    host_check = await StateService.get("host_check") or {}
+    observers = { "self": _observer("self", await StateService.get("self_check"), settings.origin,
+                                    IdentityService.public_key()) }
     known = reported = reachable = verified = 0
     peers = []
     for row in rows:
-        data = serialize_peer(row)
+        data = PeerService.serialize(row)
         if data["status"] != "active": continue
         known += 1
         if "host-reported" in data["sources"]: reported += 1
@@ -88,130 +91,9 @@ def _ratio_signal(name: str, category: str, data: dict | None, weight: int, seve
                   max_age: int | None = None) -> Signal:
     if not data or data.get("ratio") is None or not data.get("samples"):
         return Signal(name, category, None, weight, severity, "local", None, max_age)
-    return Signal(name, category, data["ratio"], weight, severity, "local", data.get("last_ok") or data.get("last_failure"),
+    return Signal(name, category, data["ratio"], weight, severity, "local",
+                  data.get("last_ok") or data.get("last_failure"),
                   max_age, detail={ "samples": data["samples"], "outages": data.get("outage_count", 0) })
-
-
-async def host_signals() -> tuple[list[Signal], dict]:
-    population = await _population()
-    signals: list[Signal] = []
-    now = datetime.now(UTC)
-    target = settings.assessed
-    check = await State.get("host_check") or {}
-    checked_at = check.get("checked_at")
-
-    tls = check.get("tls") or {}
-    if settings.is_host:
-        signals.append(Signal("self_assessment", "integrity", 50, 5, "normal", "local",
-                              utc_now(), detail={ "note": "A host cannot vouch for itself; compare with peers." }))
-    if check:
-        if (target or "").startswith("https://") and not settings.debug:
-            signals.append(Signal("tls_valid", "reachability", 100 if tls.get("ok") else 0, 15, "high", "local",
-                                  checked_at, 2 * DAY, cap=50, detail={ k: tls.get(k) for k in ("error", "issuer", "not_after") }))
-            if tls.get("ok"):
-                days = tls.get("days_left") or 0
-                signals.append(Signal("cert_expiry_margin", "reachability", 100 if days > 14 else (60 if days > 3 else 20),
-                                      5, "normal", "local", checked_at, 2 * DAY, detail={ "days_left": days }))
-        elif not settings.debug:
-            signals.append(Signal("https", "reachability", 0, 15, "high", "local", checked_at, 2 * DAY, cap=50))
-        signals.append(Signal("endpoint_reachable", "reachability", 100 if check.get("ok") else 0, 10, "normal",
-                              "local", checked_at, 2 * HOUR, detail={ "error": check.get("error") }))
-        if settings.is_peer:
-            identity = check.get("identity")
-            signals.append(Signal("host_identity", "keys", 100 if identity == "verified" else 0, 10, "high",
-                                  "local", checked_at, DAY, detail={ "identity": identity }))
-    else:
-        signals.append(Signal("endpoint_reachable", "reachability", None, 10, "normal", "local", None, 2 * HOUR))
-
-    observed = await Uptime.observed(target, 1)
-    signals.append(_ratio_signal("uptime_24h", "reachability", observed, 10, max_age=2 * HOUR))
-    week = await Uptime.observed(target, 7)
-    signals.append(_ratio_signal("uptime_7d", "reachability", week, 5, max_age=2 * DAY))
-
-    signals.extend(await role().signals(now))
-
-    verification = await State.get("ledger_verification") or {}
-    if verification:
-        signals.append(Signal("local_copy_valid", "integrity", 100 if verification.get("valid") else 0, 20,
-                              "critical", "local", verification.get("checked_at"), 2 * DAY, cap=10,
-                              detail={ "size": verification.get("size"), "problems": verification.get("problems", [])[:5] }))
-
-    latest = await Checkpoints.latest()
-    if latest:
-        status = latest["status"]
-        value = { "verified": 100, "overlap": 50, "stale": 30, "missing": 20, "failed": 0 }.get(status, 0)
-        signals.append(Signal("checkpoint_status", "integrity", value, 10, "high", "local", latest["computed_at"],
-                              2 * DAY, detail={ "day": latest["day"], "status": status }))
-
-    agreement = await Checkpoints.agreement()
-    nodes = [node for node in agreement.get("nodes") or [] if node["verdict"] != "ahead-unverified"]
-    if nodes:
-        good = sum(1 for node in nodes if node["verdict"] in ("match", "consistent-prefix"))
-        bad = len(nodes) - good
-        signals.append(Signal("root_agreement", "integrity", round(100 * good / len(nodes)), 20,
-                              "critical" if bad else "normal", "peer", utc_now(), 2 * DAY,
-                              cap=25 if bad and good == 0 else None,
-                              detail={ "agree": good, "diverged": bad, "day": agreement.get("day") }))
-    else:
-        signals.append(Signal("root_agreement", "integrity", None, 20, "normal", "peer"))
-
-    proofs = await _open_conflicts(EQUIVOCATION, "host")
-    signals.append(Signal("equivocation_free", "integrity", 0 if proofs else 100, 20, "critical", "local", utc_now(),
-                          None, cap=5, detail={ "proofs": [row.kind for row in proofs][:10] }))
-
-    key_changes = await _open_conflicts(("host-key-changed",), "host")
-    if settings.is_peer:
-        signals.append(Signal("host_key_stable", "keys", 0 if key_changes else 100, 15, "critical", "local", utc_now(),
-                              None, cap=30, detail={ "changes": len(key_changes) }))
-
-    flagged = await accounts.flagged_counts()
-    signals.append(Signal("keylog_and_actions_valid", "keys", 0 if flagged["critical"] else 100, 20, "critical", "local",
-                          utc_now(), None, cap=15, detail=flagged))
-    signals.append(Signal("host_asserted_key_changes", "keys",
-                          max(0, 100 - 20 * flagged["host_asserted"]), 5, "normal", "local", utc_now(),
-                          detail={ "count": flagged["host_asserted"] }))
-
-    from .integrity import Integrity
-    for group in await Integrity.current():
-        for item in group["records"]:
-            artifact = item["record"]["id"]
-            seen = await role().observation(artifact)
-            if not seen:
-                continue
-            status = seen.get("status")
-            mapping = {
-                "verified": (100, "normal", None), "outdated": (40, "high", 60),
-                "served-mismatch": (0, "critical", 20), "reference-mismatch": (0, "critical", 20),
-                "unreferenced": (70, "normal", None), "unreachable": (None, "normal", None),
-                "not-served": (None, "normal", None)
-            }
-            value, severity, cap = mapping.get(status, (None, "normal", None))
-            signals.append(Signal(f"artifact:{artifact}", "integrity", value, 10, severity, "local", seen.get("ts"),
-                                  2 * DAY, cap, detail={ k: seen.get(k) for k in ("status", "served_version", "latest_version", "observed", "claimed") }))
-
-    changes = await _integrity_changes(30)
-    unexplained = [change for change in changes if not change["after_restart"]]
-    if changes:
-        signals.append(Signal("hash_changes_in_stable_periods", "history", max(0, 100 - 20 * len(unexplained)), 10,
-                              "normal", "local", changes[-1]["ts"], None,
-                              detail={ "changes": len(changes), "without_restart": len(unexplained) }))
-
-    others = await _open_conflicts(("sync-failed", "invalid-checkpoint", "checkpoint-equivocation",
-                                    "artifact-outdated", "peer-key-changed"), None, 30)
-    signals.append(Signal("open_conflicts", "history", max(0, 100 - 10 * len(others)), 5, "normal", "local", utc_now(),
-                          detail={ "count": len(others) }))
-
-    signals.append(Signal("independent_observers", "diversity", min(100, 34 * population["independent"]), 15,
-                          "high", "derived", utc_now(), detail={ "independent": population["independent"],
-                                                                 "clusters": len(population["clusters"]) }))
-    if population["verified"]:
-        overlap = len([name for name in population["host_cluster"] if name not in ("@host",)])
-        signals.append(Signal("peer_host_overlap", "diversity", max(0, 100 - 50 * overlap), 10, "high", "derived",
-                              utc_now(), detail={ "sharing_infrastructure_with_host": overlap }))
-        share = population["largest_cluster"] / max(1, population["verified"] + 1)
-        signals.append(Signal("sybil_concentration", "diversity", round(100 * (1 - share)) if population["verified"] > 1 else None,
-                              10, "normal", "derived", utc_now(), detail={ "largest_cluster": population["largest_cluster"] }))
-    return signals, population
 
 
 async def _integrity_changes(days: int) -> list[dict]:
@@ -231,59 +113,21 @@ async def _integrity_changes(days: int) -> list[dict]:
         return changes
 
 
-async def peer_signals(peer: dict, population: dict) -> list[Signal]:
-    check = peer.get("check") or {}
-    checked_at = check.get("checked_at")
-    signals = []
-    tls = check.get("tls") or {}
-    if check:
-        if peer["url"].startswith("https://") and not settings.debug:
-            signals.append(Signal("tls_valid", "reachability", 100 if tls.get("ok") else 0, 15, "high", "local",
-                                  checked_at, 2 * DAY, cap=50, detail={ "error": tls.get("error") }))
-        elif not settings.debug:
-            signals.append(Signal("https", "reachability", 0, 15, "high", "local", checked_at, 2 * DAY, cap=50))
-        signals.append(Signal("identity_verified", "keys", 100 if check.get("identity") == "verified" else 0, 20,
-                              "critical", "local", checked_at, 2 * DAY, cap=20, detail={ "identity": check.get("identity") }))
-        comparison = (check.get("comparison") or {}).get("status")
-        mapping = { "match": 100, "behind": 80, "ahead": 70, "empty": 60, "diverged": 0, "unknown": None }
-        signals.append(Signal("ledger_consistency", "integrity", mapping.get(comparison), 25,
-                              "critical" if comparison == "diverged" else "normal", "local", checked_at, 2 * DAY,
-                              cap=15 if comparison == "diverged" else None, detail={ "comparison": comparison }))
-    else:
-        signals.append(Signal("identity_verified", "keys", None, 20, "critical"))
-    observed = await Uptime.observed(peer["url"], 7)
-    signals.append(_ratio_signal("uptime_7d", "reachability", observed, 10, max_age=2 * DAY))
-    if peer.get("connected") is not None and settings.is_host:
-        signals.append(Signal("connected", "reachability", 100 if peer.get("connected") else 30, 5, "normal", "local",
-                              peer.get("last_heartbeat_at")))
-    key_changes = await _open_conflicts(("peer-key-changed",), peer["url"])
-    signals.append(Signal("key_stable", "keys", 0 if key_changes else 100, 10, "high", "local", utc_now()))
-
-    group = next((g for g in population["clusters"] if peer["url"] in g), None)
-    if group is not None:
-        shares_host = "@host" in group
-        signals.append(Signal("independent_from_host", "diversity", 0 if shares_host else 100, 15, "high", "derived",
-                              utc_now(), detail={ "cluster": group }))
-        signals.append(Signal("cluster_size", "diversity", max(0, 100 - 25 * (len(group) - 1)), 10, "normal", "derived",
-                              utc_now(), detail={ "size": len(group) }))
-    return signals
-
-
-class Trust:
+class TrustService:
     @staticmethod
     def sign(report: dict) -> dict:
-        envelope = { "node": NodeIdentity.node_id(), "key": NodeIdentity.public_key(), "report": report }
-        return { **envelope, "signature": NodeIdentity.sign(CONTEXT, envelope) }
+        envelope = { "node": IdentityService.node_id(), "key": IdentityService.public_key(), "report": report }
+        return { **envelope, "signature": IdentityService.sign(CONTEXT, envelope) }
 
     @classmethod
     async def assess(cls) -> dict:
-        signals, population = await host_signals()
+        signals, population = await TrustService.host_signals()
         host = score.compute(signals, population["independent"])
         host["target"] = settings.assessed
         host["perspective"] = "peer" if settings.is_peer else "self"
         peers = []
         for peer in population["peers"]:
-            assessment = score.compute(await peer_signals(peer, population), 1)
+            assessment = score.compute(await TrustService.peer_signals(peer, population), 1)
             assessment["target"] = peer["url"]
             assessment["node"] = peer.get("node")
             assessment["sources"] = peer.get("sources")
@@ -295,11 +139,13 @@ class Trust:
             "host": host,
             "peers": peers,
             "population": { key: population[key] for key in
-                            ("known", "reported", "reachable", "verified", "independent", "observers", "largest_cluster") },
+                            ("known", "reported", "reachable", "verified", "independent", "observers",
+                             "largest_cluster") },
             "clusters": population["clusters"]
         }
         async with db.async_executor(model=TrustSnapshot) as e:
-            await e.insert(TrustSnapshot(host["target"], report["computed_at"], host["score"], host["level"], dumps(report)))
+            await e.insert(TrustSnapshot(host["target"], report["computed_at"], host["score"], host["level"],
+                                         dumps(report)))
         return report
 
     @staticmethod
@@ -318,7 +164,181 @@ class Trust:
 
     @staticmethod
     async def prune(days: int = 30):
-        from sqlalchemy import delete
         since = to_ts(datetime.now(UTC) - timedelta(days=days))
         async with db.async_executor(model=TrustSnapshot) as e:
             await e.exec(delete(TrustSnapshot).where(TrustSnapshot.computed_at < since), scalars=False)
+
+    @staticmethod
+    async def host_signals() -> tuple[list[Signal], dict]:
+        population = await _population()
+        signals: list[Signal] = []
+        now = datetime.now(UTC)
+        target = settings.assessed
+        check = await StateService.get("host_check") or {}
+        checked_at = check.get("checked_at")
+
+        tls = check.get("tls") or {}
+        if settings.is_host:
+            signals.append(Signal("self_assessment", "integrity", 50, 5, "normal", "local",
+                                  utc_now(), detail={ "note": "A host cannot vouch for itself; compare with peers." }))
+        if check:
+            if (target or "").startswith("https://") and not settings.debug:
+                signals.append(Signal("tls_valid", "reachability", 100 if tls.get("ok") else 0, 15, "high", "local",
+                                      checked_at, 2 * DAY, cap=50, detail={ k: tls.get(k) for k in ("error", "issuer",
+                                                                                                    "not_after") }))
+                if tls.get("ok"):
+                    days = tls.get("days_left") or 0
+                    signals.append(Signal("cert_expiry_margin", "reachability",
+                                          100 if days > 14 else (60 if days > 3 else 20),
+                                          5, "normal", "local", checked_at, 2 * DAY, detail={ "days_left": days }))
+            elif not settings.debug:
+                signals.append(Signal("https", "reachability", 0, 15, "high", "local", checked_at, 2 * DAY, cap=50))
+            signals.append(Signal("endpoint_reachable", "reachability", 100 if check.get("ok") else 0, 10, "normal",
+                                  "local", checked_at, 2 * HOUR, detail={ "error": check.get("error") }))
+            if settings.is_peer:
+                identity = check.get("identity")
+                signals.append(Signal("host_identity", "keys", 100 if identity == "verified" else 0, 10, "high",
+                                      "local", checked_at, DAY, detail={ "identity": identity }))
+        else:
+            signals.append(Signal("endpoint_reachable", "reachability", None, 10, "normal", "local", None, 2 * HOUR))
+
+        observed = await UptimeService.observed(target, 1)
+        signals.append(_ratio_signal("uptime_24h", "reachability", observed, 10, max_age=2 * HOUR))
+        week = await UptimeService.observed(target, 7)
+        signals.append(_ratio_signal("uptime_7d", "reachability", week, 5, max_age=2 * DAY))
+
+        signals.extend(await role().signals(now))
+
+        verification = await StateService.get("ledger_verification") or {}
+        if verification:
+            signals.append(Signal("local_copy_valid", "integrity", 100 if verification.get("valid") else 0, 20,
+                                  "critical", "local", verification.get("checked_at"), 2 * DAY, cap=10,
+                                  detail={ "size": verification.get("size"), "problems": verification.get("problems",
+                                                                                                          [])[:5] }))
+
+        latest = await CheckpointService.latest()
+        if latest:
+            status = latest["status"]
+            value = { "verified": 100, "overlap": 50, "stale": 30, "missing": 20, "failed": 0 }.get(status, 0)
+            signals.append(Signal("checkpoint_status", "integrity", value, 10, "high", "local", latest["computed_at"],
+                                  2 * DAY, detail={ "day": latest["day"], "status": status }))
+
+        agreement = await CheckpointService.agreement()
+        nodes = [node for node in agreement.get("nodes") or [] if node["verdict"] != "ahead-unverified"]
+        if nodes:
+            good = sum(1 for node in nodes if node["verdict"] in ("match", "consistent-prefix"))
+            bad = len(nodes) - good
+            signals.append(Signal("root_agreement", "integrity", round(100 * good / len(nodes)), 20,
+                                  "critical" if bad else "normal", "peer", utc_now(), 2 * DAY,
+                                  cap=25 if bad and good == 0 else None,
+                                  detail={ "agree": good, "diverged": bad, "day": agreement.get("day") }))
+        else:
+            signals.append(Signal("root_agreement", "integrity", None, 20, "normal", "peer"))
+
+        proofs = await _open_conflicts(EQUIVOCATION, "host")
+        signals.append(Signal("equivocation_free", "integrity", 0 if proofs else 100, 20, "critical", "local",
+                              utc_now(),
+                              None, cap=5, detail={ "proofs": [row.kind for row in proofs][:10] }))
+
+        key_changes = await _open_conflicts(("host-key-changed",), "host")
+        if settings.is_peer:
+            signals.append(Signal("host_key_stable", "keys", 0 if key_changes else 100, 15, "critical", "local",
+                                  utc_now(),
+                                  None, cap=30, detail={ "changes": len(key_changes) }))
+
+        flagged = await AccountService.flagged_counts()
+        signals.append(Signal("keylog_and_actions_valid", "keys", 0 if flagged["critical"] else 100, 20, "critical",
+                              "local",
+                              utc_now(), None, cap=15, detail=flagged))
+        signals.append(Signal("host_asserted_key_changes", "keys",
+                              max(0, 100 - 20 * flagged["host_asserted"]), 5, "normal", "local", utc_now(),
+                              detail={ "count": flagged["host_asserted"] }))
+
+        from wf_peering.services.integrity import IntegrityService
+        for group in await IntegrityService.current():
+            for item in group["records"]:
+                artifact = item["record"]["id"]
+                seen = await role().observation(artifact)
+                if not seen:
+                    continue
+                status = seen.get("status")
+                mapping = {
+                    "verified": (100, "normal", None), "outdated": (40, "high", 60),
+                    "served-mismatch": (0, "critical", 20), "reference-mismatch": (0, "critical", 20),
+                    "unreferenced": (70, "normal", None), "unreachable": (None, "normal", None),
+                    "not-served": (None, "normal", None)
+                }
+                value, severity, cap = mapping.get(status, (None, "normal", None))
+                signals.append(Signal(f"artifact:{artifact}", "integrity", value, 10, severity, "local", seen.get("ts"),
+                                      2 * DAY, cap, detail={ k: seen.get(k) for k in ("status", "served_version",
+                                                                                      "latest_version", "observed",
+                                                                                      "claimed") }))
+
+        changes = await _integrity_changes(30)
+        unexplained = [change for change in changes if not change["after_restart"]]
+        if changes:
+            signals.append(Signal("hash_changes_in_stable_periods", "history", max(0, 100 - 20 * len(unexplained)), 10,
+                                  "normal", "local", changes[-1]["ts"], None,
+                                  detail={ "changes": len(changes), "without_restart": len(unexplained) }))
+
+        others = await _open_conflicts(("sync-failed", "invalid-checkpoint", "checkpoint-equivocation",
+                                        "artifact-outdated", "peer-key-changed"), None, 30)
+        signals.append(Signal("open_conflicts", "history", max(0, 100 - 10 * len(others)), 5, "normal", "local",
+                              utc_now(),
+                              detail={ "count": len(others) }))
+
+        signals.append(Signal("independent_observers", "diversity", min(100, 34 * population["independent"]), 15,
+                              "high", "derived", utc_now(), detail={ "independent": population["independent"],
+                                                                     "clusters": len(population["clusters"]) }))
+        if population["verified"]:
+            overlap = len([name for name in population["host_cluster"] if name not in ("@host",)])
+            signals.append(Signal("peer_host_overlap", "diversity", max(0, 100 - 50 * overlap), 10, "high", "derived",
+                                  utc_now(), detail={ "sharing_infrastructure_with_host": overlap }))
+            share = population["largest_cluster"] / max(1, population["verified"] + 1)
+            signals.append(Signal("sybil_concentration", "diversity",
+                                  round(100 * (1 - share)) if population["verified"] > 1 else None,
+                                  10, "normal", "derived", utc_now(),
+                                  detail={ "largest_cluster": population["largest_cluster"] }))
+        return signals, population
+
+    @staticmethod
+    async def peer_signals(peer: dict, population: dict) -> list[Signal]:
+        check = peer.get("check") or {}
+        checked_at = check.get("checked_at")
+        signals = []
+        tls = check.get("tls") or {}
+        if check:
+            if peer["url"].startswith("https://") and not settings.debug:
+                signals.append(Signal("tls_valid", "reachability", 100 if tls.get("ok") else 0, 15, "high", "local",
+                                      checked_at, 2 * DAY, cap=50, detail={ "error": tls.get("error") }))
+            elif not settings.debug:
+                signals.append(Signal("https", "reachability", 0, 15, "high", "local", checked_at, 2 * DAY, cap=50))
+            signals.append(Signal("identity_verified", "keys", 100 if check.get("identity") == "verified" else 0, 20,
+                                  "critical", "local", checked_at, 2 * DAY, cap=20,
+                                  detail={ "identity": check.get("identity") }))
+            comparison = (check.get("comparison") or {}).get("status")
+            mapping = { "match": 100, "behind": 80, "ahead": 70, "empty": 60, "diverged": 0, "unknown": None }
+            signals.append(Signal("ledger_consistency", "integrity", mapping.get(comparison), 25,
+                                  "critical" if comparison == "diverged" else "normal", "local", checked_at, 2 * DAY,
+                                  cap=15 if comparison == "diverged" else None, detail={ "comparison": comparison }))
+        else:
+            signals.append(Signal("identity_verified", "keys", None, 20, "critical"))
+        observed = await UptimeService.observed(peer["url"], 7)
+        signals.append(_ratio_signal("uptime_7d", "reachability", observed, 10, max_age=2 * DAY))
+        if peer.get("connected") is not None and settings.is_host:
+            signals.append(Signal("connected", "reachability", 100 if peer.get("connected") else 30, 5, "normal",
+                                  "local",
+                                  peer.get("last_heartbeat_at")))
+        key_changes = await _open_conflicts(("peer-key-changed",), peer["url"])
+        signals.append(Signal("key_stable", "keys", 0 if key_changes else 100, 10, "high", "local", utc_now()))
+
+        group = next((g for g in population["clusters"] if peer["url"] in g), None)
+        if group is not None:
+            shares_host = "@host" in group
+            signals.append(Signal("independent_from_host", "diversity", 0 if shares_host else 100, 15, "high",
+                                  "derived",
+                                  utc_now(), detail={ "cluster": group }))
+            signals.append(Signal("cluster_size", "diversity", max(0, 100 - 25 * (len(group) - 1)), 10, "normal",
+                                  "derived",
+                                  utc_now(), detail={ "size": len(group) }))
+        return signals

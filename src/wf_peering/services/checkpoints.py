@@ -5,88 +5,25 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, UTC
 import asyncio, json
 
-from ..models.ledger import LedgerEntry
-from ..models.sync import Checkpoint, RemoteCheckpoint
-from ..protocol import entries, keylog, actions, integrity as spec
-from ..protocol.canonical import canonical, canonical_text, digest
-from ..protocol.merkle import leaf_hash, root
-from ..protocol.signing import verify, fingerprint, valid_ed25519
-from ..role import current as role
-from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
-from .identity import NodeIdentity
-from .journal import Journal
-from .ledger import Ledger
-from .store import Conflicts
+from wf_peering.exceptions import IntegrityRecordError
+from wf_peering.models.ledger import LedgerEntry
+from wf_peering.models.sync import Checkpoint, RemoteCheckpoint
+from wf_peering.protocol import entries, keylog, actions, integrity as spec
+from wf_peering.protocol.canonical import canonical, canonical_text, digest
+from wf_peering.protocol.merkle import leaf_hash, root
+from wf_peering.protocol.signing import verify, fingerprint, valid_ed25519
+from wf_peering.role import current as role
+from wf_peering.services.conflicts import ConflictService
+from wf_peering.services.identity import IdentityService
+from wf_peering.services.journal import JournalService
+from wf_peering.services.ledger import LedgerService
+from wf_peering.settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 
 CONTEXT = "wf-checkpoint-v1"
 GENESIS = "0" * 64
 
 
-def state_leaves(contents: list[dict]) -> dict:
-    accounts_state: dict[str, tuple] = {}
-    artifacts: dict[str, str] = {}
-    from .accounts import CHANGE_PROTOCOL
-    for content in contents:
-        body = content.get("body") or {}
-        protocol = body.get("protocol")
-        if content.get("kind") == "peering:integrity":
-            try: artifacts[body["record"]["id"]] = spec.fingerprint(spec.normalize(body["record"], body.get("provider")))
-            except (KeyError, TypeError, spec.IntegrityError): pass
-            continue
-        if content.get("kind") == "peering:integrity-missing":
-            artifacts.pop(body.get("artifact"), None)
-            continue
-        handle = None
-        if protocol == keylog.PROTOCOL: handle = (body.get("statement") or {}).get("account")
-        elif protocol == actions.PROTOCOL: handle = (body.get("action") or {}).get("account")
-        elif protocol == CHANGE_PROTOCOL: handle = body.get("account")
-        if not keylog.valid_handle(handle): continue
-        keys, state = accounts_state.get(handle) or (keylog.AccountKeys(handle=handle), actions.ActionState())
-        try:
-            if protocol == keylog.PROTOCOL:
-                _, keys = keylog.evaluate(keys, body)
-            elif protocol == actions.PROTOCOL:
-                try: recorded = int(entries.parse_ts(content.get("ts")).timestamp())
-                except ValueError: recorded = None
-                actions.evaluate(keys, state, body, recorded)
-            else:
-                actions.apply_unsigned(state, body.get("target"), body.get("params") or {}, body.get("result"))
-        except Exception as exc:
-            log_factory.warning(f"[peering] Replaying entry {content.get('seq')} failed: {exc}")
-        accounts_state[handle] = (keys, state)
-
-    rows = []
-    for handle, (keys, state) in accounts_state.items():
-        rows.append(["account", handle, digest({ "keys": keys.to_dict(), "actions": state.to_dict() })])
-    for artifact, value in artifacts.items():
-        rows.append(["artifact", artifact, value])
-    rows.sort(key=lambda row: (row[0], row[1]))
-    return {
-        "root": root([leaf_hash(canonical(row)) for row in rows]),
-        "accounts": len(accounts_state),
-        "artifacts": len(artifacts)
-    }
-
-
-async def replay(size: int) -> dict:
-    async with db.async_executor(model=LedgerEntry) as e:
-        result = await e.exec(select(LedgerEntry.content).where(LedgerEntry.seq <= size).order_by(LedgerEntry.seq))
-        contents = [json.loads(text) for text in result.all()]
-    return await asyncio.get_running_loop().run_in_executor(None, state_leaves, contents)
-
-
-def serialize(row: Checkpoint) -> dict:
-    return {
-        "day": row.day,
-        "status": row.status,
-        "hash": row.hash,
-        "content": json.loads(row.content) if row.content else None,
-        "signature": row.signature,
-        "computed_at": row.computed_at
-    }
-
-
-class Checkpoints:
+class CheckpointService:
     _lock: asyncio.Lock | None = None
 
     @classmethod
@@ -114,20 +51,20 @@ class Checkpoints:
         async with cls._guard():
             existing = await cls.get(day)
             if existing and existing.status not in ("missing",):
-                return serialize(existing)
+                return CheckpointService.serialize(existing)
 
             size, status, sync = await role().checkpoint_basis(day, moment)
 
-            _, ledger_root = await Ledger.root(size)
-            head_row = await Ledger.get(size) if size else None
-            state = await replay(size)
-            journal_size, journal_root = await Journal.root()
+            _, ledger_root = await LedgerService.root(size)
+            head_row = await LedgerService.get(size) if size else None
+            state = await CheckpointService.replay(size)
+            journal_size, journal_root = await JournalService.root()
             previous = await cls.previous(day)
 
             content = {
                 "v": 1,
-                "node": NodeIdentity.node_id(),
-                "key": NodeIdentity.public_key(),
+                "node": IdentityService.node_id(),
+                "key": IdentityService.public_key(),
                 "role": settings.role,
                 "origin": settings.assessed,
                 "day": day,
@@ -142,7 +79,7 @@ class Checkpoints:
                 "schema": SCHEMA_VERSION
             }
             value = digest(content)
-            signature = NodeIdentity.sign(CONTEXT, content)
+            signature = IdentityService.sign(CONTEXT, content)
             async with db.async_executor(model=Checkpoint) as e:
                 if existing:
                     existing.status = status
@@ -154,14 +91,14 @@ class Checkpoints:
                     await e.insert(Checkpoint(day, status, content["computed_at"], value,
                                               canonical_text(content), signature))
 
-        await Journal.append("peering:checkpoint", { "day": day, "status": status, "hash": value,
+        await JournalService.append("peering:checkpoint", { "day": day, "status": status, "hash": value,
                                                      "ledger": content["ledger"], "state_root": state["root"] })
         signed = { "checkpoint": content, "signature": signature, "hash": value }
         try: await role().publish_checkpoint(signed)
         except Exception as exc:
             log_factory.exception(exc, "[peering] Publishing the checkpoint failed.")
         if status != "verified":
-            await Conflicts.record("checkpoint-" + status, "high" if status == "failed" else "normal",
+            await ConflictService.record("checkpoint-" + status, "high" if status == "failed" else "normal",
                                    f"The checkpoint of {day} is {status}.", { "day": day, "sync": sync },
                                    subject="self", key=day)
         return { "day": day, "status": status, "hash": value, "content": content, "signature": signature }
@@ -182,14 +119,14 @@ class Checkpoints:
                 await e.insert(Checkpoint(day.isoformat(), "missing", entries.utc_now()))
                 day += timedelta(days=1)
         if missed:
-            await Journal.append("peering:checkpoint-missing", { "days": missed })
+            await JournalService.append("peering:checkpoint-missing", { "days": missed })
 
     @staticmethod
     async def latest() -> dict | None:
         async with db.async_executor(model=Checkpoint) as e:
             result = await e.exec(select(Checkpoint).order_by(Checkpoint.day.desc()).limit(1))
             row = result.first()
-            return serialize(row) if row else None
+            return CheckpointService.serialize(row) if row else None
 
     @staticmethod
     async def latest_with_root() -> dict | None:
@@ -197,13 +134,13 @@ class Checkpoints:
             result = await e.exec(select(Checkpoint).where(Checkpoint.hash.is_not(None))
                                   .order_by(Checkpoint.day.desc()).limit(1))
             row = result.first()
-            return serialize(row) if row else None
+            return CheckpointService.serialize(row) if row else None
 
     @staticmethod
     async def history(limit: int = 30) -> list[dict]:
         async with db.async_executor(model=Checkpoint) as e:
             result = await e.exec(select(Checkpoint).order_by(Checkpoint.day.desc()).limit(limit))
-            return [serialize(row) for row in result.all()]
+            return [CheckpointService.serialize(row) for row in result.all()]
 
     @staticmethod
     def check_signed(body: dict) -> tuple[dict | None, str | None]:
@@ -220,11 +157,11 @@ class Checkpoints:
         content, problem = cls.check_signed(body)
         if content is None: return problem
         if problem:
-            await Conflicts.record("invalid-checkpoint", "critical",
+            await ConflictService.record("invalid-checkpoint", "critical",
                                    f"A checkpoint attributed to {content.get('node')} failed verification: {problem}",
                                    { "body": body, "via": via }, subject=content.get("node"))
             return problem
-        if content.get("node") == NodeIdentity.node_id(): return None
+        if content.get("node") == IdentityService.node_id(): return None
         value = digest(content)
         try:
             async with db.async_executor(model=RemoteCheckpoint) as e:
@@ -240,7 +177,7 @@ class Checkpoints:
         except IntegrityError:
             return None
         if others:
-            await Conflicts.record("checkpoint-equivocation", "critical",
+            await ConflictService.record("checkpoint-equivocation", "critical",
                                    f"Node {content['node']} signed different checkpoints for {content.get('day')}.",
                                    { "day": content.get("day"), "hashes": sorted([value] + others) },
                                    subject=content["node"], key={ "day": content.get("day"), "node": content["node"] })
@@ -269,7 +206,7 @@ class Checkpoints:
             own_content = json.loads(own.content)
 
         size, mine = own_content["ledger"]["size"], own_content["ledger"]["root"]
-        local_size, _ = await Ledger.head()
+        local_size, _ = await LedgerService.head()
         rows = []
         for item in await cls.remote(day):
             ledger = (item["content"].get("ledger") or {})
@@ -277,10 +214,75 @@ class Checkpoints:
             if not isinstance(other_size, int): continue
             if other_size == size: verdict = "match" if other_root == mine else "diverged"
             elif other_size <= local_size:
-                _, at = await Ledger.root(other_size)
+                _, at = await LedgerService.root(other_size)
                 verdict = "consistent-prefix" if at == other_root else "diverged"
             else: verdict = "ahead-unverified"
             rows.append({ "node": item["node"], "status": item["content"].get("status"), "size": other_size,
                           "root": other_root, "verdict": verdict, "via": item["via"],
                           "role": item["content"].get("role") })
         return { "day": day, "size": size, "root": mine, "status": own_content.get("status"), "nodes": rows }
+
+    @staticmethod
+    def state_leaves(contents: list[dict]) -> dict:
+        accounts_state: dict[str, tuple] = {}
+        artifacts: dict[str, str] = {}
+        from wf_peering.services.accounts import AccountService
+        for content in contents:
+            body = content.get("body") or {}
+            protocol = body.get("protocol")
+            if content.get("kind") == "peering:integrity":
+                try: artifacts[body["record"]["id"]] = spec.fingerprint(spec.normalize(body["record"],
+                                                                                       body.get("provider")))
+                except (KeyError, TypeError, IntegrityRecordError): pass
+                continue
+            if content.get("kind") == "peering:integrity-missing":
+                artifacts.pop(body.get("artifact"), None)
+                continue
+            handle = None
+            if protocol == keylog.PROTOCOL: handle = (body.get("statement") or {}).get("account")
+            elif protocol == actions.PROTOCOL: handle = (body.get("action") or {}).get("account")
+            elif protocol == AccountService.CHANGE_PROTOCOL: handle = body.get("account")
+            if not keylog.valid_handle(handle): continue
+            keys, state = accounts_state.get(handle) or (keylog.AccountKeys(handle=handle), actions.ActionState())
+            try:
+                if protocol == keylog.PROTOCOL:
+                    _, keys = keylog.evaluate(keys, body)
+                elif protocol == actions.PROTOCOL:
+                    try: recorded = int(entries.parse_ts(content.get("ts")).timestamp())
+                    except ValueError: recorded = None
+                    actions.evaluate(keys, state, body, recorded)
+                else:
+                    actions.apply_unsigned(state, body.get("target"), body.get("params") or {}, body.get("result"))
+            except Exception as exc:
+                log_factory.warning(f"[peering] Replaying entry {content.get('seq')} failed: {exc}")
+            accounts_state[handle] = (keys, state)
+
+        rows = []
+        for handle, (keys, state) in accounts_state.items():
+            rows.append(["account", handle, digest({ "keys": keys.to_dict(), "actions": state.to_dict() })])
+        for artifact, value in artifacts.items():
+            rows.append(["artifact", artifact, value])
+        rows.sort(key=lambda row: (row[0], row[1]))
+        return {
+            "root": root([leaf_hash(canonical(row)) for row in rows]),
+            "accounts": len(accounts_state),
+            "artifacts": len(artifacts)
+        }
+
+    @classmethod
+    async def replay(cls, size: int) -> dict:
+        async with db.async_executor(model=LedgerEntry) as e:
+            result = await e.exec(select(LedgerEntry.content).where(LedgerEntry.seq <= size).order_by(LedgerEntry.seq))
+            contents = [json.loads(text) for text in result.all()]
+        return await asyncio.get_running_loop().run_in_executor(None, cls.state_leaves, contents)
+
+    @staticmethod
+    def serialize(row: Checkpoint) -> dict:
+        return {
+            "day": row.day,
+            "status": row.status,
+            "hash": row.hash,
+            "content": json.loads(row.content) if row.content else None,
+            "signature": row.signature,
+            "computed_at": row.computed_at
+        }

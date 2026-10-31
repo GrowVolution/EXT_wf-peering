@@ -1,5 +1,7 @@
 import hashlib
 
+from wf_peering.exceptions import CanonicalError
+
 MAX_INT = 2 ** 53 - 1
 MAX_DEPTH = 32
 
@@ -12,10 +14,6 @@ _SHORT = {
     "\r": "\\r",
     "\t": "\\t"
 }
-
-
-class CanonicalError(ValueError):
-    pass
 
 
 def _string(value: str) -> str:

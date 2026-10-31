@@ -1,6 +1,17 @@
 from datetime import datetime
 
 
+def use(role: NodeRole) -> NodeRole:
+    global _role
+    _role = role
+    return role
+
+
+def current() -> NodeRole:
+    if _role is None: raise RuntimeError("wf-peering has not been expanded with a role yet.")
+    return _role
+
+
 class NodeRole:
     name: str = ""
     software: str = ""
@@ -37,14 +48,3 @@ class NodeRole:
 
 
 _role: NodeRole | None = None
-
-
-def use(role: NodeRole) -> NodeRole:
-    global _role
-    _role = role
-    return role
-
-
-def current() -> NodeRole:
-    if _role is None: raise RuntimeError("wf-peering has not been expanded with a role yet.")
-    return _role

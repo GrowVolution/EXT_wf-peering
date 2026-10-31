@@ -4,7 +4,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, PublicFormat, NoEncryption
 import base64, hashlib, re
 
-from .canonical import canonical
+from wf_peering.protocol.canonical import canonical
 
 KEY_LENGTH = 32
 SIGNATURE_LENGTH = 64
@@ -75,10 +75,10 @@ class Signer:
         self.public_key = b64encode(self._key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
         self.fingerprint = fingerprint(self.public_key)
 
+    def sign(self, context: str, payload) -> str:
+        return b64encode(self._key.sign(message(context, payload)))
+
     @classmethod
     def generate(cls) -> "Signer":
         key = Ed25519PrivateKey.generate()
         return cls(key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()))
-
-    def sign(self, context: str, payload) -> str:
-        return b64encode(self._key.sign(message(context, payload)))

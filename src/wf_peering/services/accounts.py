@@ -1,23 +1,20 @@
 from webfluid.core.ext import db
 from sqlalchemy import select
 
-from ..models.state import AccountView
-from ..protocol import keylog, actions
-from ..protocol.canonical import CanonicalError
-from ..protocol.entries import parse_ts, utc_now
-from ..protocol.keylog import AccountKeys, Flag
-from ..protocol.actions import ActionState
-from .store import dumps, loads
-
-CHANGE_PROTOCOL = "wf-change-v1"
-PROTOCOLS = (keylog.PROTOCOL, actions.PROTOCOL, CHANGE_PROTOCOL)
+from wf_peering.exceptions import CanonicalError
+from wf_peering.models.state import AccountView
+from wf_peering.protocol import keylog, actions
+from wf_peering.protocol.actions import ActionState
+from wf_peering.protocol.entries import parse_ts, utc_now
+from wf_peering.protocol.keylog import AccountKeys
+from wf_peering.utils.serialization import dumps, loads
 
 
 def _account(body: dict) -> str | None:
     protocol = body.get("protocol")
     if protocol == keylog.PROTOCOL: return ((body.get("statement") or {}).get("account"))
     if protocol == actions.PROTOCOL: return ((body.get("action") or {}).get("account"))
-    if protocol == CHANGE_PROTOCOL: return body.get("account")
+    if protocol == AccountService.CHANGE_PROTOCOL: return body.get("account")
     return None
 
 
@@ -51,39 +48,6 @@ def _verdict(flags: list) -> str:
     return "verified"
 
 
-async def apply(e, content: dict) -> dict:
-    body = content.get("body") or {}
-    protocol = body.get("protocol")
-    if protocol not in PROTOCOLS:
-        return { "protocol": protocol, "verification": "host-claimed", "flags": [] }
-
-    handle = _account(body)
-    if not keylog.valid_handle(handle):
-        return { "protocol": protocol, "verification": "invalid",
-                 "flags": [{ "code": "INVALID_ACCOUNT", "severity": "critical" }] }
-
-    view, keys, state = await _load(e, handle)
-    info = {}
-    try:
-        if protocol == keylog.PROTOCOL:
-            verdict, keys = keylog.evaluate(keys, body)
-            flags = [flag.to_dict() for flag in verdict.flags]
-        elif protocol == actions.PROTOCOL:
-            try: recorded = int(parse_ts(content.get("ts")).timestamp())
-            except ValueError: recorded = None
-            raw, info = actions.evaluate(keys, state, body, recorded)
-            flags = [flag.to_dict() for flag in raw]
-        else:
-            flags = _change(state, body)
-    except CanonicalError:
-        flags = [{ "code": "NOT_CANONICALIZABLE", "severity": "critical" }]
-
-    await _save(e, view, handle, keys, state, flags, content.get("seq") or 0)
-    result = { "protocol": protocol, "account": handle, "verification": _verdict(flags), "flags": flags }
-    if info.get("execution"): result["execution"] = info["execution"]
-    return result
-
-
 def _change(state: ActionState, body: dict) -> list[dict]:
     target, params = body.get("target"), body.get("params")
     if not isinstance(target, str) or not isinstance(params, dict):
@@ -92,40 +56,75 @@ def _change(state: ActionState, body: dict) -> list[dict]:
     return [{ "code": "UNSIGNED_CHANGE", "severity": "info" }] + [flag.to_dict() for flag in outcome["flags"]]
 
 
-async def view(handle: str) -> dict | None:
-    async with db.async_executor(model=AccountView) as e:
-        result = await e.exec(select(AccountView).where(AccountView.handle == handle))
-        row = result.first()
-        if not row: return None
-        state = loads(row.actions, {})
-        return {
-            "account": row.handle,
-            "keys": loads(row.keys),
-            "devices": state.get("devices") or {},
-            "actions": len(state.get("ids") or []),
-            "targets": {
-                name: actions.state_digest(values) for name, values in (state.get("targets") or {}).items()
-            },
-            "flags": loads(row.flags, []),
-            "ledger_seq": row.ledger_seq,
-            "updated_at": row.updated_at
-        }
+class AccountService:
+    CHANGE_PROTOCOL = "wf-change-v1"
+    PROTOCOLS = (keylog.PROTOCOL, actions.PROTOCOL, CHANGE_PROTOCOL)
 
+    @classmethod
+    async def apply(cls, e, content: dict) -> dict:
+        body = content.get("body") or {}
+        protocol = body.get("protocol")
+        if protocol not in cls.PROTOCOLS:
+            return { "protocol": protocol, "verification": "host-claimed", "flags": [] }
 
-async def flagged_counts() -> dict:
-    counts = { "critical": 0, "high": 0, "normal": 0, "host_asserted": 0 }
-    async with db.async_executor(model=AccountView) as e:
-        result = await e.exec(select(AccountView.flags))
-        for raw in result.all():
-            for flag in loads(raw, []):
-                severity = flag.get("severity")
-                if severity in counts: counts[severity] += 1
-                if str(flag.get("code", "")).startswith("HOST_ASSERTED"): counts["host_asserted"] += 1
-    return counts
+        handle = _account(body)
+        if not keylog.valid_handle(handle):
+            return { "protocol": protocol, "verification": "invalid",
+                     "flags": [{ "code": "INVALID_ACCOUNT", "severity": "critical" }] }
 
+        view, keys, state = await _load(e, handle)
+        info = {}
+        try:
+            if protocol == keylog.PROTOCOL:
+                verdict, keys = keylog.evaluate(keys, body)
+                flags = [flag.to_dict() for flag in verdict.flags]
+            elif protocol == actions.PROTOCOL:
+                try: recorded = int(parse_ts(content.get("ts")).timestamp())
+                except ValueError: recorded = None
+                raw, info = actions.evaluate(keys, state, body, recorded)
+                flags = [flag.to_dict() for flag in raw]
+            else:
+                flags = _change(state, body)
+        except CanonicalError:
+            flags = [{ "code": "NOT_CANONICALIZABLE", "severity": "critical" }]
 
-def critical(result: dict) -> list[dict]:
-    return [flag for flag in result.get("flags") or [] if flag.get("severity") == "critical"]
+        await _save(e, view, handle, keys, state, flags, content.get("seq") or 0)
+        result = { "protocol": protocol, "account": handle, "verification": _verdict(flags), "flags": flags }
+        if info.get("execution"): result["execution"] = info["execution"]
+        return result
 
+    @staticmethod
+    async def view(handle: str) -> dict | None:
+        async with db.async_executor(model=AccountView) as e:
+            result = await e.exec(select(AccountView).where(AccountView.handle == handle))
+            row = result.first()
+            if not row: return None
+            state = loads(row.actions, {})
+            return {
+                "account": row.handle,
+                "keys": loads(row.keys),
+                "devices": state.get("devices") or {},
+                "actions": len(state.get("ids") or []),
+                "targets": {
+                    name: actions.state_digest(values) for name, values in (state.get("targets") or {}).items()
+                },
+                "flags": loads(row.flags, []),
+                "ledger_seq": row.ledger_seq,
+                "updated_at": row.updated_at
+            }
 
-__all__ = ["apply", "view", "flagged_counts", "critical", "PROTOCOLS", "CHANGE_PROTOCOL", "Flag"]
+    @staticmethod
+    async def flagged_counts() -> dict:
+        counts = { "critical": 0, "high": 0, "normal": 0, "host_asserted": 0 }
+        async with db.async_executor(model=AccountView) as e:
+            result = await e.exec(select(AccountView.flags))
+            for raw in result.all():
+                for flag in loads(raw, []):
+                    severity = flag.get("severity")
+                    if severity in counts: counts[severity] += 1
+                    if str(flag.get("code", "")).startswith("HOST_ASSERTED"): counts["host_asserted"] += 1
+        return counts
+
+    @staticmethod
+    def critical(result: dict) -> list[dict]:
+        return [flag for flag in result.get("flags") or [] if flag.get("severity") == "critical"]

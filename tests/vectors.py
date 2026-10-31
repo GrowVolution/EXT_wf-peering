@@ -1,17 +1,16 @@
-import hashlib, json, sys
-from pathlib import Path
-
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
 from wf_peering.protocol import actions, keylog
 from wf_peering.protocol.canonical import canonical_text, digest
 from wf_peering.protocol.signing import b64encode, fingerprint, Signer
+from pathlib import Path
+import hashlib, json, sys
 
-ORIGIN = "https://host.example"
 DEVICE_SEED = bytes(range(32))
 RECOVERY_SECRET = bytes(range(32, 64))
 ACCOUNT_KEY = bytes(range(64, 96))
+
+ORIGIN = "https://host.example"
 
 
 def hkdf(material: bytes, salt: bytes, info: bytes, length: int) -> bytes:

@@ -1,22 +1,23 @@
 from datetime import datetime, UTC
 import re
 
-from .canonical import canonical, sha256_hex, CanonicalError
-from .merkle import leaf_hash
-from .signing import verify
+from wf_peering.exceptions import CanonicalError
+from wf_peering.protocol.canonical import canonical, sha256_hex
+from wf_peering.protocol.merkle import leaf_hash
+from wf_peering.protocol.signing import verify
 
 VERSION = 1
-LEDGER_CONTEXT = "wf-ledger-v1"
-JOURNAL_CONTEXT = "wf-journal-v1"
-HEAD_CONTEXT = "wf-ledger-head-v1"
-GENESIS = "0" * 64
+MAX_ENTRY_BYTES = 64 * 1024
 
 _KIND = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}:[a-z0-9][a-z0-9_.:-]{0,95}$")
 _SOURCE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _HEX = re.compile(r"^[0-9a-f]{64}$")
 
-MAX_ENTRY_BYTES = 64 * 1024
+LEDGER_CONTEXT = "wf-ledger-v1"
+JOURNAL_CONTEXT = "wf-journal-v1"
+HEAD_CONTEXT = "wf-ledger-head-v1"
+GENESIS = "0" * 64
 
 
 def utc_now() -> str:

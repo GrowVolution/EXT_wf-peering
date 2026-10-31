@@ -86,7 +86,7 @@ so a report from a debug node is never mistaken for a production one. Browser ch
 declared `url`, which is how a phone in the LAN and a browser on `localhost` test against the same host.
 Debug never reaches a deployment: `wf run` sets `DEBUG_MODE` only with `-d`.
 
-A peer that connects to a host names its public URL in the handshake. `services.peers.verify_claim(url,
+A peer that connects to a host names its public URL in the handshake. `PeerService.verify_claim(url,
 node)` fetches that URL's `/node` statement and answers `URL_UNREACHABLE`, `URL_NOT_VERIFIED` or `None`;
 the host role refuses the connection on any code, so only addresses that serve the connecting node are
 ever listed.

@@ -1,19 +1,20 @@
 from fastapi import Request
-from .utils import public, error
+
+from wf_peering.api.utils import public, error
 
 
 async def trust_request(request: Request):
-    from ..services.trust import Trust
-    report = await Trust.latest()
+    from wf_peering.services import TrustService
+    report = await TrustService.latest()
     if report is None: return error("NOT_ASSESSED_YET", 404)
-    return public(Trust.sign(report))
+    return public(TrustService.sign(report))
 
 
 async def trust_history_request(request: Request):
-    from ..services.trust import Trust
-    return public({ "history": await Trust.history() })
+    from wf_peering.services import TrustService
+    return public({ "history": await TrustService.history() })
 
 
 async def conflicts_request(request: Request):
-    from ..services.store import Conflicts
-    return public({ "conflicts": await Conflicts.open(), "open": await Conflicts.counts() })
+    from wf_peering.services import ConflictService
+    return public({ "conflicts": await ConflictService.open(), "open": await ConflictService.counts() })

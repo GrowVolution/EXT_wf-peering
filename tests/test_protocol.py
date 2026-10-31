@@ -1,15 +1,15 @@
-import hashlib, json, random
-import pytest
-
-from wf_peering.protocol import canonical as cj, merkle, keylog, actions, integrity, netpolicy, trust, entries
-from wf_peering.protocol.signing import Signer, b64encode, fingerprint
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from wf_peering.exceptions import CanonicalError, IntegrityRecordError, PolicyError
+from wf_peering.protocol import canonical as cj, merkle, keylog, actions, integrity, netpolicy, trust, entries
+from wf_peering.protocol.signing import Signer, b64encode, fingerprint
+import hashlib, json, pytest, random
+
+HANDLE = keylog.account_handle("https://host.example", 7)
 
 
 def x25519_pub() -> str:
     return b64encode(X25519PrivateKey.generate().public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
-
 
 
 def test_canonical_sorts_keys_and_drops_whitespace():
@@ -20,17 +20,10 @@ def test_canonical_escapes_minimally_and_keeps_unicode():
     assert cj.canonical_text({"k": "ä\n\"\\\u0001"}) == '{"k":"ä\\n\\"\\\\\\u0001"}'
 
 
-@pytest.mark.parametrize("value", [1.5, {"a": float("nan")}, 2 ** 53, {1: "x"}, {"ü": 1}, "\ud800", object()])
-def test_canonical_rejects_non_canonical_values(value):
-    with pytest.raises(cj.CanonicalError):
-        cj.canonical(value)
-
-
 def test_canonical_is_stable_across_key_order():
     one = {"z": {"b": [1, 2], "a": "x"}, "a": None}
     two = json.loads(json.dumps({"a": None, "z": {"a": "x", "b": [1, 2]}}))
     assert cj.digest(one) == cj.digest(two)
-
 
 
 def brute_root(leaves):
@@ -39,22 +32,6 @@ def brute_root(leaves):
     k = 1
     while k * 2 < len(leaves): k *= 2
     return merkle.node_hash(brute_root(leaves[:k]), brute_root(leaves[k:]))
-
-
-@pytest.mark.parametrize("size", [0, 1, 2, 3, 4, 5, 7, 8, 9, 16, 31, 33])
-def test_merkle_root_matches_reference_and_proofs_verify(size):
-    leaves = [merkle.leaf_hash(f"leaf-{i}".encode()) for i in range(size)]
-    value = merkle.root(leaves)
-    assert value == brute_root(leaves)
-    for index in range(size):
-        proof = merkle.inclusion_proof(index, leaves)
-        assert merkle.verify_inclusion(index, size, leaves[index], proof, value)
-        assert not merkle.verify_inclusion(index, size, merkle.leaf_hash(b"other"), proof, value)
-    for first in range(1, size + 1):
-        proof = merkle.consistency_proof(first, leaves)
-        assert merkle.verify_consistency(first, size, merkle.root(leaves[:first]), value, proof)
-        if first < size:
-            assert not merkle.verify_consistency(first, size, merkle.leaf_hash(b"x"), value, proof)
 
 
 def test_merkle_detects_any_changed_leaf():
@@ -69,7 +46,6 @@ def test_merkle_detects_any_changed_leaf():
 def test_known_empty_and_single_roots():
     assert merkle.root([]) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     assert merkle.root([merkle.leaf_hash(b"")]) == "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
-
 
 
 def test_entry_problems_and_link_checks():
@@ -90,31 +66,6 @@ def test_entry_hash_signature_roundtrip():
     assert entries.verify_hash(signer.public_key, entries.LEDGER_CONTEXT, value, signature)
     assert not entries.verify_hash(signer.public_key, entries.JOURNAL_CONTEXT, value, signature)
     assert not entries.verify_hash(Signer.generate().public_key, entries.LEDGER_CONTEXT, value, signature)
-
-
-
-HANDLE = keylog.account_handle("https://host.example", 7)
-
-
-class Account:
-    def __init__(self):
-        self.envelopes = []
-        self.head = keylog.GENESIS
-
-    def statement(self, kind, authority, keys, reset=None):
-        statement = {"v": 1, "account": HANDLE, "seq": len(self.envelopes) + 1, "prev": self.head,
-                     "type": kind, "authority": authority, "keys": keys, "ts": 1760000000 + len(self.envelopes)}
-        if reset is not None: statement["reset"] = reset
-        return statement
-
-    def add(self, statement, subject=None, authority=None):
-        envelope = {"protocol": keylog.PROTOCOL, "statement": statement, "signatures": {
-            "subject": subject.sign(keylog.SUBJECT_CONTEXT, statement) if subject else None,
-            "authority": authority.sign(keylog.AUTHORITY_CONTEXT, statement) if authority else None
-        }}
-        self.envelopes.append(envelope)
-        self.head = keylog.statement_hash(statement)
-        return envelope
 
 
 def device_keys(signer):
@@ -254,7 +205,6 @@ def test_a_host_reset_closes_an_account_without_a_device():
     assert state.recovery is None and not state.anchored
 
 
-
 def make_action(signer, seq, prev, params, action_id=None, target="users:profile", iat=1760000000):
     return {"v": 1, "account": HANDLE, "device": fingerprint(signer.public_key), "action": "users:profile.set",
             "target": target, "params": params, "id": action_id or b64encode(random.randbytes(16)), "seq": seq,
@@ -343,7 +293,6 @@ def test_action_shape_rejects_long_lifetime():
     assert "INVALID_LIFETIME" in actions.shape(action)
 
 
-
 def test_integrity_normalization_and_aggregation_keep_grouping():
     good = {"id": "users_e2ee", "additive": "users", "hash": "A" * 64, "version": "v1", "type": "script"}
     groups = integrity.aggregate([[good, {"id": "BAD ID", "hash": "x"}], None, [{"id": "ocean_tar", "additive": "ocean",
@@ -361,41 +310,6 @@ def test_integrity_fingerprint_ignores_computation_time():
     assert integrity.fingerprint(record) == integrity.fingerprint(later) != integrity.fingerprint(changed)
 
 
-@pytest.mark.parametrize("record,code", [
-    ({"id": "a", "hash": "0" * 64}, "INVALID_ID"),
-    ({"id": "ok_id", "hash": "0" * 63}, "INVALID_HASH"),
-    ({"id": "ok_id", "hash": "0" * 64, "algorithm": "md5"}, "UNSUPPORTED_ALGORITHM"),
-    ({"id": "ok_id", "hash": "0" * 64, "url": "https://evil"}, "INVALID_URL"),
-    ({"id": "ok_id", "hash": "0" * 64, "provenance": {"status": "trust-me"}}, "INVALID_PROVENANCE"),
-])
-def test_integrity_rejects_bad_records(record, code):
-    with pytest.raises(integrity.IntegrityError, match=code):
-        integrity.normalize(record)
-
-
-
-@pytest.mark.parametrize("url,code", [
-    ("http://peer.example", "HTTPS_REQUIRED"),
-    ("https://user:pw@peer.example", "CREDENTIALS_NOT_ALLOWED"),
-    ("https://peer.example/path", "ORIGIN_ONLY"),
-    ("https://peer.example:8443", "PORT_NOT_ALLOWED"),
-    ("https://localhost", "INTERNAL_HOST"),
-    ("https://intranet", "INTERNAL_HOST"),
-    ("ftp://peer.example", "HTTPS_REQUIRED"),
-])
-def test_peer_urls_are_validated(url, code):
-    with pytest.raises(netpolicy.PolicyError, match=code):
-        netpolicy.parse_target(url)
-
-
-@pytest.mark.parametrize("address,allowed", [
-    ("8.8.8.8", True), ("10.0.0.1", False), ("127.0.0.1", False), ("169.254.169.254", False),
-    ("::1", False), ("fd00::1", False), ("2001:4860:4860::8888", True), ("::ffff:10.0.0.1", False), ("0.0.0.0", False)
-])
-def test_address_policy_blocks_internal_targets(address, allowed):
-    assert netpolicy.address_allowed(address) is allowed
-
-
 def test_clusters_group_shared_infrastructure():
     groups = netpolicy.clusters({
         "@host": {"addresses": ["203.0.113.10"], "domain": "app.example.com"},
@@ -407,7 +321,6 @@ def test_clusters_group_shared_infrastructure():
     })
     assert ["@host", "a", "b"] in groups
     assert ["c", "d", "e"] in groups
-
 
 
 def sig(name, value, severity="normal", category="integrity", weight=10, **kw):
@@ -500,3 +413,80 @@ def test_claimed_baseline_must_be_consistent_with_the_signed_params():
     data["result"]["state_values"] = values
     flags, info = actions.evaluate(keys, ok_state, data)
     assert info["execution"] == "baseline-claimed" and ok_state.targets["users:profile"] == values
+
+
+@pytest.mark.parametrize("value", [1.5, {"a": float("nan")}, 2 ** 53, {1: "x"}, {"ü": 1}, "\ud800", object()])
+def test_canonical_rejects_non_canonical_values(value):
+    with pytest.raises(CanonicalError):
+        cj.canonical(value)
+
+
+@pytest.mark.parametrize("size", [0, 1, 2, 3, 4, 5, 7, 8, 9, 16, 31, 33])
+def test_merkle_root_matches_reference_and_proofs_verify(size):
+    leaves = [merkle.leaf_hash(f"leaf-{i}".encode()) for i in range(size)]
+    value = merkle.root(leaves)
+    assert value == brute_root(leaves)
+    for index in range(size):
+        proof = merkle.inclusion_proof(index, leaves)
+        assert merkle.verify_inclusion(index, size, leaves[index], proof, value)
+        assert not merkle.verify_inclusion(index, size, merkle.leaf_hash(b"other"), proof, value)
+    for first in range(1, size + 1):
+        proof = merkle.consistency_proof(first, leaves)
+        assert merkle.verify_consistency(first, size, merkle.root(leaves[:first]), value, proof)
+        if first < size:
+            assert not merkle.verify_consistency(first, size, merkle.leaf_hash(b"x"), value, proof)
+
+
+@pytest.mark.parametrize("record,code", [
+    ({"id": "a", "hash": "0" * 64}, "INVALID_ID"),
+    ({"id": "ok_id", "hash": "0" * 63}, "INVALID_HASH"),
+    ({"id": "ok_id", "hash": "0" * 64, "algorithm": "md5"}, "UNSUPPORTED_ALGORITHM"),
+    ({"id": "ok_id", "hash": "0" * 64, "url": "https://evil"}, "INVALID_URL"),
+    ({"id": "ok_id", "hash": "0" * 64, "provenance": {"status": "trust-me"}}, "INVALID_PROVENANCE"),
+])
+def test_integrity_rejects_bad_records(record, code):
+    with pytest.raises(IntegrityRecordError, match=code):
+        integrity.normalize(record)
+
+
+@pytest.mark.parametrize("url,code", [
+    ("http://peer.example", "HTTPS_REQUIRED"),
+    ("https://user:pw@peer.example", "CREDENTIALS_NOT_ALLOWED"),
+    ("https://peer.example/path", "ORIGIN_ONLY"),
+    ("https://peer.example:8443", "PORT_NOT_ALLOWED"),
+    ("https://localhost", "INTERNAL_HOST"),
+    ("https://intranet", "INTERNAL_HOST"),
+    ("ftp://peer.example", "HTTPS_REQUIRED"),
+])
+def test_peer_urls_are_validated(url, code):
+    with pytest.raises(PolicyError, match=code):
+        netpolicy.parse_target(url)
+
+
+@pytest.mark.parametrize("address,allowed", [
+    ("8.8.8.8", True), ("10.0.0.1", False), ("127.0.0.1", False), ("169.254.169.254", False),
+    ("::1", False), ("fd00::1", False), ("2001:4860:4860::8888", True), ("::ffff:10.0.0.1", False), ("0.0.0.0", False)
+])
+def test_address_policy_blocks_internal_targets(address, allowed):
+    assert netpolicy.address_allowed(address) is allowed
+
+
+class Account:
+    def __init__(self):
+        self.envelopes = []
+        self.head = keylog.GENESIS
+
+    def statement(self, kind, authority, keys, reset=None):
+        statement = {"v": 1, "account": HANDLE, "seq": len(self.envelopes) + 1, "prev": self.head,
+                     "type": kind, "authority": authority, "keys": keys, "ts": 1760000000 + len(self.envelopes)}
+        if reset is not None: statement["reset"] = reset
+        return statement
+
+    def add(self, statement, subject=None, authority=None):
+        envelope = {"protocol": keylog.PROTOCOL, "statement": statement, "signatures": {
+            "subject": subject.sign(keylog.SUBJECT_CONTEXT, statement) if subject else None,
+            "authority": authority.sign(keylog.AUTHORITY_CONTEXT, statement) if authority else None
+        }}
+        self.envelopes.append(envelope)
+        self.head = keylog.statement_hash(statement)
+        return envelope

@@ -4,34 +4,20 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 import asyncio, json
 
-from ..models.ledger import LedgerEntry
-from ..protocol import entries
-from ..protocol.canonical import canonical_text, CanonicalError
-from ..protocol.merkle import root, inclusion_proof, consistency_proof
-from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
-from . import accounts
-from .identity import NodeIdentity
-from .store import dumps, loads, Conflicts, State
+from wf_peering.exceptions import CanonicalError, LedgerError
+from wf_peering.models.ledger import LedgerEntry
+from wf_peering.protocol import entries
+from wf_peering.protocol.canonical import canonical_text
+from wf_peering.protocol.merkle import root, inclusion_proof, consistency_proof
+from wf_peering.services.accounts import AccountService
+from wf_peering.services.conflicts import ConflictService
+from wf_peering.services.identity import IdentityService
+from wf_peering.services.state import StateService
+from wf_peering.settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
+from wf_peering.utils.serialization import dumps, loads
 
 
-class LedgerError(Exception):
-    def __init__(self, code: str, detail: dict | None = None):
-        super().__init__(code)
-        self.code = code
-        self.detail = detail or {}
-
-
-def serialize(row: LedgerEntry) -> dict:
-    return {
-        "seq": row.seq,
-        "hash": row.hash,
-        "content": json.loads(row.content),
-        "signature": row.signature,
-        "verification": loads(row.flags)
-    }
-
-
-class Ledger:
+class LedgerService:
     _lock: asyncio.Lock | None = None
     _listeners: set = set()
 
@@ -41,18 +27,30 @@ class Ledger:
         return cls._lock
 
     @classmethod
+    def _notify(cls, entry: dict):
+        for listener in list(cls._listeners):
+            try: listener(entry)
+            except Exception as exc: log_factory.exception(exc, "[peering] A ledger listener failed.")
+
+    @staticmethod
+    async def _report(content: dict, verification: dict):
+        bad = AccountService.critical(verification)
+        if not bad: return
+        await ConflictService.record(
+            "ledger-entry-invalid", "critical",
+            f"Ledger entry {content['seq']} ({content['kind']}) failed verification: "
+            + ", ".join(flag["code"] for flag in bad),
+            { "seq": content["seq"], "kind": content["kind"], "flags": bad },
+            subject=verification.get("account")
+        )
+
+    @classmethod
     def subscribe(cls, listener):
         cls._listeners.add(listener)
 
     @classmethod
     def unsubscribe(cls, listener):
         cls._listeners.discard(listener)
-
-    @classmethod
-    def _notify(cls, entry: dict):
-        for listener in list(cls._listeners):
-            try: listener(entry)
-            except Exception as exc: log_factory.exception(exc, "[peering] A ledger listener failed.")
 
     @staticmethod
     async def head() -> tuple[int, str]:
@@ -69,7 +67,7 @@ class Ledger:
 
     @staticmethod
     def signing_key() -> str | None:
-        return NodeIdentity.public_key() if settings.is_host else None
+        return IdentityService.public_key() if settings.is_host else None
 
     @classmethod
     async def append(cls, kind: str, source: str, body: dict, subject: str | None = None,
@@ -87,10 +85,10 @@ class Ledger:
             if issues: raise LedgerError("INVALID_ENTRY", { "issues": issues })
 
             value = entries.entry_hash(content)
-            signature = entries.sign_hash(NodeIdentity.signer, entries.LEDGER_CONTEXT, value)
+            signature = entries.sign_hash(IdentityService.signer, entries.LEDGER_CONTEXT, value)
             try:
                 async with db.async_executor(model=LedgerEntry) as e:
-                    verification = await accounts.apply(e, content)
+                    verification = await AccountService.apply(e, content)
                     await e.insert(LedgerEntry(
                         seq=content["seq"], hash=value, leaf=entries.entry_leaf(content), prev=prev,
                         kind=kind, source=source, subject=subject, ref=ref, ts=content["ts"],
@@ -108,18 +106,6 @@ class Ledger:
         await cls._report(content, verification)
         cls._notify(entry)
         return { "seq": content["seq"], "hash": value, "verification": verification }
-
-    @staticmethod
-    async def _report(content: dict, verification: dict):
-        bad = accounts.critical(verification)
-        if not bad: return
-        await Conflicts.record(
-            "ledger-entry-invalid", "critical",
-            f"Ledger entry {content['seq']} ({content['kind']}) failed verification: "
-            + ", ".join(flag["code"] for flag in bad),
-            { "seq": content["seq"], "kind": content["kind"], "flags": bad },
-            subject=verification.get("account")
-        )
 
     @staticmethod
     async def by_ref(ref: str) -> LedgerEntry | None:
@@ -151,30 +137,33 @@ class Ledger:
             if content["seq"] <= seq:
                 stored = await cls.get(content["seq"])
                 if stored and stored.hash == value: return "duplicate"
-                await Conflicts.record(
+                await ConflictService.record(
                     "host-equivocation", "critical",
                     f"The host signed two different ledger entries for sequence {content['seq']}.",
                     {
                         "seq": content["seq"],
-                        "stored": { "hash": stored.hash, "content": json.loads(stored.content), "signature": stored.signature } if stored else None,
+                        "stored": { "hash": stored.hash, "content": json.loads(stored.content),
+                                   "signature": stored.signature } if stored else None,
                         "received": { "hash": value, "content": content, "signature": signature }
                     },
-                    subject="host", key={ "seq": content["seq"], "hashes": sorted([value, stored.hash if stored else ""]) }
+                    subject="host", key={ "seq": content["seq"], "hashes": sorted([value,
+                                                                                   stored.hash if stored else ""]) }
                 )
                 raise LedgerError("FORK", { "seq": content["seq"] })
             if content["seq"] > seq + 1:
                 raise LedgerError("GAP", { "have": seq, "got": content["seq"] })
             if content["prev"] != prev:
-                await Conflicts.record(
+                await ConflictService.record(
                     "host-equivocation", "critical",
                     f"Ledger entry {content['seq']} does not extend the history the host signed before.",
-                    { "seq": content["seq"], "expected_prev": prev, "received": { "hash": value, "content": content, "signature": signature } },
+                    { "seq": content["seq"], "expected_prev": prev, "received": { "hash": value, "content": content,
+                                                                                 "signature": signature } },
                     subject="host", key={ "seq": content["seq"], "prev": prev, "hash": value }
                 )
                 raise LedgerError("FORK", { "seq": content["seq"] })
 
             async with db.async_executor(model=LedgerEntry) as e:
-                verification = await accounts.apply(e, content)
+                verification = await AccountService.apply(e, content)
                 await e.insert(LedgerEntry(
                     seq=content["seq"], hash=value, leaf=entries.entry_leaf(content), prev=prev,
                     kind=content["kind"], source=content["source"], subject=content["subject"],
@@ -194,7 +183,7 @@ class Ledger:
                 stmt = stmt.where(LedgerEntry.kind.like(kind[:-1] + "%") if kind.endswith("*") else LedgerEntry.kind == kind)
             if subject: stmt = stmt.where(LedgerEntry.subject == subject)
             result = await e.exec(stmt.order_by(LedgerEntry.seq).limit(limit))
-            return [serialize(row) for row in result.all()]
+            return [LedgerService.serialize(row) for row in result.all()]
 
     @staticmethod
     async def leaves(size: int | None = None) -> list[str]:
@@ -241,10 +230,10 @@ class Ledger:
         head = entries.head(size, value, tree, entries.utc_now(), origin, PROTOCOL_VERSION, SCHEMA_VERSION)
         return {
             "head": head,
-            "signer": NodeIdentity.node_id(),
-            "key": NodeIdentity.public_key(),
-            "signature": NodeIdentity.sign(entries.HEAD_CONTEXT, head),
-            "host_key": settings.host_key if settings.is_peer else NodeIdentity.public_key()
+            "signer": IdentityService.node_id(),
+            "key": IdentityService.public_key(),
+            "signature": IdentityService.sign(entries.HEAD_CONTEXT, head),
+            "host_key": settings.host_key if settings.is_peer else IdentityService.public_key()
         }
 
     @staticmethod
@@ -264,7 +253,8 @@ class Ledger:
                     if entries.entry_hash(content) != row.hash: problems.append(f"{row.seq}:HASH_MISMATCH")
                     if entries.entry_leaf(content) != row.leaf: problems.append(f"{row.seq}:LEAF_MISMATCH")
                     problems.extend(f"{row.seq}:{issue}" for issue in entries.problems(content))
-                    problems.extend(f"{row.seq}:{issue}" for issue in entries.check_link(content, previous_hash, previous_seq))
+                    problems.extend(f"{row.seq}:{issue}" for issue in entries.check_link(content, previous_hash,
+                                                                                         previous_seq))
                 except (ValueError, CanonicalError):
                     problems.append(f"{row.seq}:UNREADABLE")
                 if public_key and not entries.verify_hash(public_key, entries.LEDGER_CONTEXT, row.hash, row.signature):
@@ -274,5 +264,15 @@ class Ledger:
 
     @staticmethod
     async def host_key() -> str | None:
-        if settings.is_host: return NodeIdentity.public_key()
-        return settings.host_key or await State.get("host_key")
+        if settings.is_host: return IdentityService.public_key()
+        return settings.host_key or await StateService.get("host_key")
+
+    @staticmethod
+    def serialize(row: LedgerEntry) -> dict:
+        return {
+            "seq": row.seq,
+            "hash": row.hash,
+            "content": json.loads(row.content),
+            "signature": row.signature,
+            "verification": loads(row.flags)
+        }

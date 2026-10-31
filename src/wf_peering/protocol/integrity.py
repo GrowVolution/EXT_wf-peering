@@ -1,12 +1,8 @@
 import re
 
-from .canonical import canonical, digest, CanonicalError
+from wf_peering.exceptions import CanonicalError, IntegrityRecordError
+from wf_peering.protocol.canonical import canonical, digest
 
-ALGORITHMS = { "sha256": 64, "sha384": 96, "sha512": 128 }
-PROVENANCE = (
-    "unsigned", "signed", "reference-match", "reference-mismatch",
-    "reference-unavailable", "unknown"
-)
 MAX_RECORD_BYTES = 16 * 1024
 MAX_RECORDS = 256
 
@@ -18,27 +14,29 @@ _STRINGS = ("additive", "type", "version", "served_version", "latest_version", "
 _OBJECTS = ("context", "provenance", "reference", "extra")
 _IDENTITY = ("hash", "algorithm", "version", "served_version", "latest_version", "url", "parent")
 
-
-class IntegrityError(ValueError):
-    pass
+ALGORITHMS = { "sha256": 64, "sha384": 96, "sha512": 128 }
+PROVENANCE = (
+    "unsigned", "signed", "reference-match", "reference-mismatch",
+    "reference-unavailable", "unknown"
+)
 
 
 def _hash(value, algorithm) -> str:
-    if not isinstance(value, str): raise IntegrityError("INVALID_HASH")
+    if not isinstance(value, str): raise IntegrityRecordError("INVALID_HASH")
     value = value.strip().lower()
     if len(value) != ALGORITHMS[algorithm] or not _HEX.match(value):
-        raise IntegrityError("INVALID_HASH")
+        raise IntegrityRecordError("INVALID_HASH")
     return value
 
 
 def normalize(record, provider: str | None = None) -> dict:
-    if not isinstance(record, dict): raise IntegrityError("NOT_AN_OBJECT")
+    if not isinstance(record, dict): raise IntegrityRecordError("NOT_AN_OBJECT")
     artifact = record.get("id")
     if not isinstance(artifact, str) or not _ID.match(artifact):
-        raise IntegrityError("INVALID_ID")
+        raise IntegrityRecordError("INVALID_ID")
 
     algorithm = (record.get("algorithm") or "sha256")
-    if algorithm not in ALGORITHMS: raise IntegrityError("UNSUPPORTED_ALGORITHM")
+    if algorithm not in ALGORITHMS: raise IntegrityRecordError("UNSUPPORTED_ALGORITHM")
 
     out = {
         "id": artifact,
@@ -51,55 +49,55 @@ def normalize(record, provider: str | None = None) -> dict:
         value = record.get(key)
         if value is None: continue
         if not isinstance(value, str) or len(value) > 256:
-            raise IntegrityError(f"INVALID_{key.upper()}")
+            raise IntegrityRecordError(f"INVALID_{key.upper()}")
         out[key] = value
     if out["additive"] is not None and not isinstance(out["additive"], str):
-        raise IntegrityError("INVALID_ADDITIVE")
+        raise IntegrityRecordError("INVALID_ADDITIVE")
 
     for key in _OBJECTS:
         value = record.get(key)
         if value is None: continue
-        if not isinstance(value, dict): raise IntegrityError(f"INVALID_{key.upper()}")
+        if not isinstance(value, dict): raise IntegrityRecordError(f"INVALID_{key.upper()}")
         out[key] = value
 
     url = record.get("url")
     if url is not None:
         if not isinstance(url, str) or not url.startswith("/") or url.startswith("//") or len(url) > 512:
-            raise IntegrityError("INVALID_URL")
+            raise IntegrityRecordError("INVALID_URL")
         out["url"] = url
 
     served = record.get("served")
     if served is not None:
-        if not isinstance(served, bool): raise IntegrityError("INVALID_SERVED")
+        if not isinstance(served, bool): raise IntegrityRecordError("INVALID_SERVED")
         out["served"] = served
 
     size = record.get("size")
     if size is not None:
         if not isinstance(size, int) or isinstance(size, bool) or size < 0:
-            raise IntegrityError("INVALID_SIZE")
+            raise IntegrityRecordError("INVALID_SIZE")
         out["size"] = size
 
     computed = record.get("computed_at")
     if computed is not None:
         if not isinstance(computed, str) or not _TS.match(computed):
-            raise IntegrityError("INVALID_COMPUTED_AT")
+            raise IntegrityRecordError("INVALID_COMPUTED_AT")
         out["computed_at"] = computed
 
     provenance = out.get("provenance")
     if provenance is not None and provenance.get("status") not in PROVENANCE:
-        raise IntegrityError("INVALID_PROVENANCE")
+        raise IntegrityRecordError("INVALID_PROVENANCE")
 
     reference = out.get("reference")
     if reference is not None and reference.get("hash") is not None:
         ref_algorithm = reference.get("algorithm") or algorithm
-        if ref_algorithm not in ALGORITHMS: raise IntegrityError("INVALID_REFERENCE")
+        if ref_algorithm not in ALGORITHMS: raise IntegrityRecordError("INVALID_REFERENCE")
         reference = dict(reference)
         reference["hash"] = _hash(reference["hash"], ref_algorithm)
         out["reference"] = reference
 
     try: size = len(canonical(out))
-    except CanonicalError as exc: raise IntegrityError("NOT_CANONICALIZABLE") from exc
-    if size > MAX_RECORD_BYTES: raise IntegrityError("RECORD_TOO_LARGE")
+    except CanonicalError as exc: raise IntegrityRecordError("NOT_CANONICALIZABLE") from exc
+    if size > MAX_RECORD_BYTES: raise IntegrityRecordError("RECORD_TOO_LARGE")
     return out
 
 
@@ -139,7 +137,7 @@ def aggregate(results) -> list[dict]:
             group["provider"] = group["provider"] or provider
             try:
                 normalized = normalize(record, provider)
-            except IntegrityError as exc:
+            except IntegrityRecordError as exc:
                 group["errors"].append({ "code": str(exc), "position": position })
                 continue
             if normalized["id"] in seen:

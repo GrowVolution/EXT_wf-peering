@@ -1,10 +1,9 @@
-from jinja2 import FileSystemLoader, PrefixLoader
-from pathlib import Path
-import json
-
 from webfluid.exceptions import FrameworkException
 from webfluid.extensions import FluidExtension
 from webfluid.utils import enabled
+from jinja2 import FileSystemLoader, PrefixLoader
+from pathlib import Path
+import json
 
 PACKAGE = Path(__file__).resolve().parent
 EXT_ID = "wf-peering"
@@ -21,7 +20,7 @@ class Peering(FluidExtension):
         super().__init__(fluid, *args, **kwargs)
 
     def expand_fluid(self, fluid, role=None, root=None, *_, **__):
-        from .role import NodeRole, use
+        from wf_peering.role import NodeRole, use
 
         if self._fluid is not None:
             if self._fluid is fluid and role in (None, self._role): return
@@ -35,18 +34,18 @@ class Peering(FluidExtension):
         if not enabled("EXT_BABEL"):
             raise FrameworkException(f"EXT_BABEL is required for {EXT_ID} to work.")
 
-        from .settings import configure
+        from wf_peering.settings import configure
         settings = configure(fluid.config, role.name, Path(root) if root else Path(fluid.project_root))
         use(role)
 
-        from .models import set_bind
+        from wf_peering.models import set_bind
         set_bind(fluid.config.get("PEERING_MODELS_DB_BIND"))
 
-        from .services.identity import NodeIdentity
-        NodeIdentity.setup()
+        from wf_peering.services import IdentityService
+        IdentityService.setup()
 
         from webfluid.core.ext import babel
-        from .i18n import translations
+        from wf_peering.i18n import translations
         babel.update_translations("messages", translations)
         self._texts = tuple(json.loads((PACKAGE / "i18n" / "default.json").read_text(encoding="utf-8")))
 
@@ -59,7 +58,7 @@ class Peering(FluidExtension):
         if settings.schedule:
             if not enabled("EXT_SCHEDULING"):
                 raise FrameworkException(f"EXT_SCHEDULING is required for {EXT_ID}, or set PEERING_SCHEDULE = False.")
-            from .jobs import schedule
+            from wf_peering.jobs import schedule
             schedule()
 
         self._fluid = fluid
@@ -69,11 +68,11 @@ class Peering(FluidExtension):
         if self._fluid is None: Peering.raise_unexpanded()
         from webfluid.core.ext import babel
         from webfluid.extensions.babel import get_locale
-        from .services.identity import NodeIdentity
-        from .settings import settings
+        from wf_peering.services import IdentityService
+        from wf_peering.settings import settings
         texts = { key.removeprefix(I18N_PREFIX): await babel.agettext(key) for key in self._texts }
         return await self._fluid.render(
-            f"{PREFIX}/status.html", role=settings.role, node=NodeIdentity.node_id(), host=settings.assessed,
+            f"{PREFIX}/status.html", role=settings.role, node=IdentityService.node_id(), host=settings.assessed,
             api=api, static=ASSETS, texts=texts, lang=get_locale().language, debug=settings.debug
         )
 

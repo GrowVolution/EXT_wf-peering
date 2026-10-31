@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 
-from .entries import parse_ts
+from wf_peering.protocol.entries import parse_ts
+
+MIN_OBSERVERS = 2
+OBSERVER_CAP = 70
 
 CATEGORY_WEIGHTS = {
     "integrity": 35,
@@ -11,43 +14,6 @@ CATEGORY_WEIGHTS = {
     "diversity": 10
 }
 SEVERITY_CAPS = { "critical": 20, "high": 60 }
-MIN_OBSERVERS = 2
-OBSERVER_CAP = 70
-
-
-@dataclass
-class Signal:
-    id: str
-    category: str
-    value: int | None
-    weight: int = 10
-    severity: str = "normal"
-    source: str = "local"
-    observed_at: str | None = None
-    max_age: int | None = None
-    cap: int | None = None
-    detail: dict = field(default_factory=dict)
-
-    def fresh(self, now: datetime) -> bool:
-        if self.max_age is None or self.observed_at is None: return True
-        try: observed = parse_ts(self.observed_at)
-        except ValueError: return False
-        return (now - observed).total_seconds() <= self.max_age
-
-    def to_dict(self, now: datetime) -> dict:
-        state = "missing" if self.value is None else ("fresh" if self.fresh(now) else "stale")
-        return {
-            "id": self.id,
-            "category": self.category,
-            "value": self.value,
-            "weight": self.weight,
-            "severity": self.severity,
-            "source": self.source,
-            "observed_at": self.observed_at,
-            "max_age": self.max_age,
-            "state": state,
-            "detail": self.detail
-        }
 
 
 def _failed(signal: Signal) -> bool:
@@ -171,3 +137,38 @@ def contrast(a: tuple[float, float, float], b: tuple[float, float, float]) -> fl
     la, lb = luminance(a), luminance(b)
     hi, lo = max(la, lb), min(la, lb)
     return (hi + 0.05) / (lo + 0.05)
+
+
+@dataclass
+class Signal:
+    id: str
+    category: str
+    value: int | None
+    weight: int = 10
+    severity: str = "normal"
+    source: str = "local"
+    observed_at: str | None = None
+    max_age: int | None = None
+    cap: int | None = None
+    detail: dict = field(default_factory=dict)
+
+    def fresh(self, now: datetime) -> bool:
+        if self.max_age is None or self.observed_at is None: return True
+        try: observed = parse_ts(self.observed_at)
+        except ValueError: return False
+        return (now - observed).total_seconds() <= self.max_age
+
+    def to_dict(self, now: datetime) -> dict:
+        state = "missing" if self.value is None else ("fresh" if self.fresh(now) else "stale")
+        return {
+            "id": self.id,
+            "category": self.category,
+            "value": self.value,
+            "weight": self.weight,
+            "severity": self.severity,
+            "source": self.source,
+            "observed_at": self.observed_at,
+            "max_age": self.max_age,
+            "state": state,
+            "detail": self.detail
+        }

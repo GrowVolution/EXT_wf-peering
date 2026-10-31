@@ -1,13 +1,11 @@
-import re
 from dataclasses import dataclass, field
+import re
 
-from .canonical import digest, CanonicalError
-from .keylog import AccountKeys, Flag, valid_handle
-from .signing import verify
+from wf_peering.exceptions import CanonicalError
+from wf_peering.protocol.canonical import digest
+from wf_peering.protocol.keylog import AccountKeys, Flag, valid_handle
+from wf_peering.protocol.signing import verify
 
-PROTOCOL = "wf-action-v1"
-CONTEXT = "wf-action-v1"
-GENESIS = "0" * 64
 MAX_LIFETIME = 900
 CLOCK_SKEW = 300
 
@@ -16,39 +14,16 @@ _TARGET = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}:[A-Za-z0-9_.:-]{1,128}$")
 _ID = re.compile(r"^[A-Za-z0-9_-]{22}$")
 _FINGERPRINT = re.compile(r"^[A-Za-z0-9_-]{22}$")
 
-
-@dataclass
-class DeviceChain:
-    seq: int = 0
-    head: str = GENESIS
-
-    def to_dict(self) -> dict:
-        return { "seq": self.seq, "head": self.head }
+PROTOCOL = "wf-action-v1"
+CONTEXT = "wf-action-v1"
+GENESIS = "0" * 64
 
 
-@dataclass
-class ActionState:
-    devices: dict = field(default_factory=dict)
-    ids: set = field(default_factory=set)
-    targets: dict = field(default_factory=dict)
-
-    def chain(self, device: str) -> DeviceChain:
-        return self.devices.setdefault(device, DeviceChain())
-
-    def to_dict(self) -> dict:
-        return {
-            "devices": { key: chain.to_dict() for key, chain in sorted(self.devices.items()) },
-            "ids": sorted(self.ids),
-            "targets": { key: value for key, value in sorted(self.targets.items()) }
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ActionState":
-        return cls(
-            devices={ key: DeviceChain(**value) for key, value in (data.get("devices") or {}).items() },
-            ids=set(data.get("ids") or []),
-            targets=dict(data.get("targets") or {})
-        )
+def _claimed(result: dict) -> tuple[dict | None, str | None]:
+    values = result.get("state_values")
+    if not isinstance(values, dict): return None, None
+    try: return values, state_digest(values)
+    except CanonicalError: return None, None
 
 
 def action_hash(action: dict) -> str:
@@ -156,13 +131,6 @@ def evaluate(keys: AccountKeys, state: ActionState, envelope: dict,
     return flags, info
 
 
-def _claimed(result: dict) -> tuple[dict | None, str | None]:
-    values = result.get("state_values")
-    if not isinstance(values, dict): return None, None
-    try: return values, state_digest(values)
-    except CanonicalError: return None, None
-
-
 def transition(state: ActionState, target: str, params: dict, result: dict | None) -> dict:
     result = result or {}
     prior = state.targets.get(target)
@@ -179,7 +147,8 @@ def transition(state: ActionState, target: str, params: dict, result: dict | Non
     if prior is None and not params.get("replace"):
         if values is None:
             return { "flags": [Flag("BASELINE_UNKNOWN", "info")], "execution": "unverifiable" }
-        consistent = result.get("state") == claimed and all(values.get(k) == v for k, v in (params.get("set") or {}).items())             and not any(k in values for k in params.get("unset") or [])
+        consistent = result.get("state") == claimed and all(values.get(k) == v for k,
+                                                            v in (params.get("set") or {}).items())             and not any(k in values for k in params.get("unset") or [])
         if not consistent:
             return { "flags": [Flag("RESULT_MISMATCH", "critical")], "execution": "mismatch" }
         state.targets[target] = values
@@ -196,3 +165,37 @@ def transition(state: ActionState, target: str, params: dict, result: dict | Non
 
 def apply_unsigned(state: ActionState, target: str, params: dict, result: dict | None = None) -> dict:
     return transition(state, target, params, result)
+
+
+@dataclass
+class DeviceChain:
+    seq: int = 0
+    head: str = GENESIS
+
+    def to_dict(self) -> dict:
+        return { "seq": self.seq, "head": self.head }
+
+
+@dataclass
+class ActionState:
+    devices: dict = field(default_factory=dict)
+    ids: set = field(default_factory=set)
+    targets: dict = field(default_factory=dict)
+
+    def chain(self, device: str) -> DeviceChain:
+        return self.devices.setdefault(device, DeviceChain())
+
+    def to_dict(self) -> dict:
+        return {
+            "devices": { key: chain.to_dict() for key, chain in sorted(self.devices.items()) },
+            "ids": sorted(self.ids),
+            "targets": { key: value for key, value in sorted(self.targets.items()) }
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ActionState":
+        return cls(
+            devices={ key: DeviceChain(**value) for key, value in (data.get("devices") or {}).items() },
+            ids=set(data.get("ids") or []),
+            targets=dict(data.get("targets") or {})
+        )

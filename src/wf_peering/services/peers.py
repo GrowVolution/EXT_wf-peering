@@ -1,49 +1,31 @@
 from webfluid.core.ext import db
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from datetime import datetime, timedelta, UTC
 import asyncio
 
-from ..models.peers import Peer, PeerConnection, Probe
-from ..protocol.entries import utc_now, to_ts
-from ..protocol.netpolicy import PolicyError, parse_target
-from ..protocol.signing import verify, fingerprint, valid_ed25519
-from ..settings import settings
-from ..utils import netcheck
-from .identity import NODE_CONTEXT
-from .store import dumps, loads, Conflicts
+from wf_peering.exceptions import PolicyError, CheckError
+from wf_peering.models.peers import Peer, PeerConnection, Probe
+from wf_peering.protocol.entries import utc_now, to_ts
+from wf_peering.protocol.netpolicy import parse_target
+from wf_peering.protocol.signing import verify, fingerprint, valid_ed25519
+from wf_peering.services.conflicts import ConflictService
+from wf_peering.services.identity import NODE_CONTEXT
+from wf_peering.settings import settings
+from wf_peering.utils import netcheck
+from wf_peering.utils.serialization import dumps, loads
 
 SOURCES = ("connected", "host-reported", "config", "gossip", "self")
 
 
-def normalize_url(url: str) -> str | None:
-    try:
-        where = parse_target(url, settings.allow_insecure, (443,) if not settings.allow_insecure else (443, 80))
-    except PolicyError: return None
-    return where.origin
+async def _served_node(url: str) -> str | None:
+    try: status, data, _ = await netcheck.get_json(url, f"{settings.api_of(url)}/node", 64 * 1024)
+    except CheckError: return None
+    if status != 200: return None
+    statement, problem = PeerService.verify_statement(data, url)
+    return None if problem else statement.get("node")
 
 
-def serialize(row: Peer) -> dict:
-    return {
-        "node": row.node_id,
-        "key": row.public_key,
-        "url": row.url,
-        "sources": loads(row.sources, []),
-        "first_seen": row.first_seen,
-        "last_seen": row.last_seen,
-        "connected": row.connected,
-        "last_connected_at": row.last_connected_at,
-        "last_disconnected_at": row.last_disconnected_at,
-        "last_heartbeat_at": row.last_heartbeat_at,
-        "head": { "seq": row.head_seq, "hash": row.head_hash } if row.head_seq is not None else None,
-        "status": row.status,
-        "failures": row.failures,
-        "last_error": row.last_error,
-        "key_changed_at": row.key_changed_at,
-        "check": loads(row.check)
-    }
-
-
-class Peers:
+class PeerService:
     @staticmethod
     async def all(include_inactive: bool = True) -> list[Peer]:
         async with db.async_executor(model=Peer) as e:
@@ -76,14 +58,15 @@ class Peers:
                     row.status = "inactive"
                     expired.append(row.url)
         if expired:
-            from .journal import Journal
-            await Journal.append("peering:peers-inactive", { "peers": expired, "days": settings.peer_inactive_days })
+            from wf_peering.services.journal import JournalService
+            await JournalService.append("peering:peers-inactive", { "peers": expired,
+                                                                   "days": settings.peer_inactive_days })
         return expired
 
     @classmethod
     async def remember(cls, url: str, source: str, node_id: str | None = None,
                        public_key: str | None = None) -> Peer | None:
-        url = normalize_url(url)
+        url = PeerService.normalize_url(url)
         if url is None or url in (settings.origin, settings.host): return None
         now = utc_now()
         async with db.async_executor(model=Peer) as e:
@@ -111,8 +94,9 @@ class Peers:
             return result.scalar() or 0
 
     @classmethod
-    async def authenticated(cls, node_id: str, public_key: str, url: str, address: str | None) -> tuple[str | None, int | None]:
-        url = normalize_url(url)
+    async def authenticated(cls, node_id: str, public_key: str, url: str, address: str | None) -> tuple[str | None,
+                                                                                                        int | None]:
+        url = PeerService.normalize_url(url)
         if url is None: return "INVALID_URL", None
         now = utc_now()
         pending = []
@@ -153,7 +137,7 @@ class Peers:
             connection.authenticated = True
             connection_id = connection.id
         for old_url, old_key in pending:
-            await Conflicts.record(
+            await ConflictService.record(
                 "peer-key-changed", "high", f"The peer at {old_url} presented a different node key.",
                 { "url": old_url, "old": old_key, "new": public_key }, subject=old_url
             )
@@ -248,7 +232,7 @@ class Peers:
                 row.public_key = node["key"]
                 row.node_id = node["node"]
         if pending:
-            await Conflicts.record(
+            await ConflictService.record(
                 "peer-key-changed", "high", f"The node at {url} now answers with a different key.",
                 pending, subject=url
             )
@@ -261,108 +245,127 @@ class Peers:
     @staticmethod
     async def prune_probes():
         since = to_ts(datetime.now(UTC) - timedelta(days=settings.probe_retention_days))
-        from sqlalchemy import delete
         async with db.async_executor(model=Probe) as e:
             await e.exec(delete(Probe).where(Probe.ts < since), scalars=False)
 
+    @staticmethod
+    def normalize_url(url: str) -> str | None:
+        try:
+            where = parse_target(url, settings.allow_insecure, (443,) if not settings.allow_insecure else (443, 80))
+        except PolicyError: return None
+        return where.origin
 
-def verify_statement(data, expected_url: str | None = None) -> tuple[dict | None, str | None]:
-    if not isinstance(data, dict): return None, "NO_STATEMENT"
-    statement, signature = data.get("statement"), data.get("signature")
-    if not isinstance(statement, dict): return None, "NO_STATEMENT"
-    key = statement.get("key")
-    if not valid_ed25519(key): return None, "INVALID_NODE_KEY"
-    if statement.get("node") != fingerprint(key): return None, "NODE_ID_MISMATCH"
-    if not verify(key, NODE_CONTEXT, statement, signature or ""): return None, "INVALID_NODE_SIGNATURE"
-    if expected_url is not None and normalize_url(statement.get("url") or "") != expected_url:
-        return statement, "URL_MISMATCH"
-    return statement, None
+    @staticmethod
+    def serialize(row: Peer) -> dict:
+        return {
+            "node": row.node_id,
+            "key": row.public_key,
+            "url": row.url,
+            "sources": loads(row.sources, []),
+            "first_seen": row.first_seen,
+            "last_seen": row.last_seen,
+            "connected": row.connected,
+            "last_connected_at": row.last_connected_at,
+            "last_disconnected_at": row.last_disconnected_at,
+            "last_heartbeat_at": row.last_heartbeat_at,
+            "head": { "seq": row.head_seq, "hash": row.head_hash } if row.head_seq is not None else None,
+            "status": row.status,
+            "failures": row.failures,
+            "last_error": row.last_error,
+            "key_changed_at": row.key_changed_at,
+            "check": loads(row.check)
+        }
 
+    @classmethod
+    def verify_statement(cls, data, expected_url: str | None = None) -> tuple[dict | None, str | None]:
+        if not isinstance(data, dict): return None, "NO_STATEMENT"
+        statement, signature = data.get("statement"), data.get("signature")
+        if not isinstance(statement, dict): return None, "NO_STATEMENT"
+        key = statement.get("key")
+        if not valid_ed25519(key): return None, "INVALID_NODE_KEY"
+        if statement.get("node") != fingerprint(key): return None, "NODE_ID_MISMATCH"
+        if not verify(key, NODE_CONTEXT, statement, signature or ""): return None, "INVALID_NODE_SIGNATURE"
+        if expected_url is not None and cls.normalize_url(statement.get("url") or "") != expected_url:
+            return statement, "URL_MISMATCH"
+        return statement, None
 
-async def _served_node(url: str) -> str | None:
-    try: status, data, _ = await netcheck.get_json(url, f"{settings.api_of(url)}/node", 64 * 1024)
-    except netcheck.CheckError: return None
-    if status != 200: return None
-    statement, problem = verify_statement(data, url)
-    return None if problem else statement.get("node")
+    @classmethod
+    async def verify_claim(cls, url: str, node_id: str) -> str | None:
+        target = cls.normalize_url(url)
+        if target is None: return "INVALID_URL"
+        try: served = await asyncio.wait_for(_served_node(target), timeout=max(1, settings.timeout - 2))
+        except asyncio.TimeoutError: served = None
+        if served is None: return "URL_UNREACHABLE"
+        return None if served == node_id else "URL_NOT_VERIFIED"
 
+    @classmethod
+    async def check_node(cls, url: str) -> dict:
+        from wf_peering.services.ledger import LedgerService
+        api = settings.api_of(url)
+        report = await netcheck.inspect(url)
+        if report.get("error"):
+            await PeerService.probe(url, False, None, report["error"], { "stage": "inspect" })
+            return report
 
-async def verify_claim(url: str, node_id: str) -> str | None:
-    target = normalize_url(url)
-    if target is None: return "INVALID_URL"
-    try: served = await asyncio.wait_for(_served_node(target), timeout=max(1, settings.timeout - 2))
-    except asyncio.TimeoutError: served = None
-    if served is None: return "URL_UNREACHABLE"
-    return None if served == node_id else "URL_NOT_VERIFIED"
+        try:
+            status, data, meta = await netcheck.get_json(url, f"{api}/node", 64 * 1024)
+        except CheckError as exc:
+            report.update(ok=False, error=exc.code, detail=exc.detail)
+            await PeerService.probe(url, False, None, exc.code, { "stage": "node" })
+            return report
 
+        report["latency_ms"] = meta.get("latency_ms")
+        if status != 200:
+            report.update(ok=False, error=f"HTTP_{status}")
+            await PeerService.probe(url, False, meta.get("latency_ms"), report["error"], { "stage": "node" })
+            return report
 
-async def check_node(url: str) -> dict:
-    from .ledger import Ledger
-    api = settings.api_of(url)
-    report = await netcheck.inspect(url)
-    if report.get("error"):
-        await Peers.probe(url, False, None, report["error"], { "stage": "inspect" })
+        statement, problem = cls.verify_statement(data, cls.normalize_url(url))
+        report["node"] = statement
+        report["identity"] = problem or "verified"
+        if problem:
+            report.update(ok=False, error=problem)
+            await PeerService.probe(url, False, meta.get("latency_ms"), problem, { "stage": "identity" })
+            return report
+
+        try:
+            status, head, _ = await netcheck.get_json(url, f"{api}/ledger/head", 64 * 1024)
+            report["head"] = head if status == 200 else None
+        except CheckError as exc:
+            report["head"] = None
+            report["head_error"] = exc.code
+
+        try:
+            status, latest, _ = await netcheck.get_json(url, f"{api}/checkpoints/latest", 256 * 1024)
+            report["checkpoint"] = latest if status == 200 else None
+        except CheckError as exc:
+            report["checkpoint"] = None
+            report["checkpoint_error"] = exc.code
+
+        report["ok"] = True
+        report["comparison"] = await cls.compare_head(report.get("head"), LedgerService)
+        await PeerService.probe(url, True, report.get("latency_ms"), None, {
+            "stage": "complete", "tls": (report.get("tls") or {}).get("ok")
+        })
         return report
 
-    try:
-        status, data, meta = await netcheck.get_json(url, f"{api}/node", 64 * 1024)
-    except netcheck.CheckError as exc:
-        report.update(ok=False, error=exc.code, detail=exc.detail)
-        await Peers.probe(url, False, None, exc.code, { "stage": "node" })
-        return report
-
-    report["latency_ms"] = meta.get("latency_ms")
-    if status != 200:
-        report.update(ok=False, error=f"HTTP_{status}")
-        await Peers.probe(url, False, meta.get("latency_ms"), report["error"], { "stage": "node" })
-        return report
-
-    statement, problem = verify_statement(data, normalize_url(url))
-    report["node"] = statement
-    report["identity"] = problem or "verified"
-    if problem:
-        report.update(ok=False, error=problem)
-        await Peers.probe(url, False, meta.get("latency_ms"), problem, { "stage": "identity" })
-        return report
-
-    try:
-        status, head, _ = await netcheck.get_json(url, f"{api}/ledger/head", 64 * 1024)
-        report["head"] = head if status == 200 else None
-    except netcheck.CheckError as exc:
-        report["head"] = None
-        report["head_error"] = exc.code
-
-    try:
-        status, latest, _ = await netcheck.get_json(url, f"{api}/checkpoints/latest", 256 * 1024)
-        report["checkpoint"] = latest if status == 200 else None
-    except netcheck.CheckError as exc:
-        report["checkpoint"] = None
-        report["checkpoint_error"] = exc.code
-
-    report["ok"] = True
-    report["comparison"] = await compare_head(report.get("head"), Ledger)
-    await Peers.probe(url, True, report.get("latency_ms"), None, {
-        "stage": "complete", "tls": (report.get("tls") or {}).get("ok")
-    })
-    return report
-
-
-async def compare_head(remote, ledger) -> dict:
-    if not isinstance(remote, dict) or not isinstance(remote.get("head"), dict):
-        return { "status": "unknown" }
-    head = remote["head"]
-    size = head.get("seq")
-    if not isinstance(size, int): return { "status": "unknown" }
-    local_size, local_hash = await ledger.head()
-    if size == 0 or local_size == 0: return { "status": "empty", "remote": size, "local": local_size }
-    common = min(size, local_size)
-    _, local_root = await ledger.root(common)
-    if size == local_size:
-        same = head.get("hash") == local_hash and head.get("root") == local_root
-        return { "status": "match" if same else "diverged", "size": size,
-                 "remote_root": head.get("root"), "local_root": local_root }
-    if size < local_size:
-        row = await ledger.get(size)
-        same = row is not None and row.hash == head.get("hash")
-        return { "status": "behind" if same else "diverged", "remote": size, "local": local_size }
-    return { "status": "ahead", "remote": size, "local": local_size, "remote_hash": head.get("hash") }
+    @staticmethod
+    async def compare_head(remote, ledger) -> dict:
+        if not isinstance(remote, dict) or not isinstance(remote.get("head"), dict):
+            return { "status": "unknown" }
+        head = remote["head"]
+        size = head.get("seq")
+        if not isinstance(size, int): return { "status": "unknown" }
+        local_size, local_hash = await ledger.head()
+        if size == 0 or local_size == 0: return { "status": "empty", "remote": size, "local": local_size }
+        common = min(size, local_size)
+        _, local_root = await ledger.root(common)
+        if size == local_size:
+            same = head.get("hash") == local_hash and head.get("root") == local_root
+            return { "status": "match" if same else "diverged", "size": size,
+                     "remote_root": head.get("root"), "local_root": local_root }
+        if size < local_size:
+            row = await ledger.get(size)
+            same = row is not None and row.hash == head.get("hash")
+            return { "status": "behind" if same else "diverged", "remote": size, "local": local_size }
+        return { "status": "ahead", "remote": size, "local": local_size, "remote_hash": head.get("hash") }

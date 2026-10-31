@@ -1,16 +1,16 @@
 from fastapi.responses import JSONResponse
 import re
 
+_KIND = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}:[a-z0-9][a-z0-9_.:*-]{0,95}$")
+_SUBJECT = re.compile(r"^[A-Za-z0-9_.:@/-]{1,256}$")
+_HEX = re.compile(r"^[0-9a-f]{64}$")
+
 HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET",
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff"
 }
-
-_KIND = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}:[a-z0-9][a-z0-9_.:*-]{0,95}$")
-_SUBJECT = re.compile(r"^[A-Za-z0-9_.:@/-]{1,256}$")
-_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
 def public(data, status: int = 200) -> JSONResponse:

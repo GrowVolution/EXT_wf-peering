@@ -2,10 +2,11 @@ from webfluid.utils.logging import factory as log_factory
 from datetime import datetime, timedelta, UTC
 import asyncio
 
-from .protocol.entries import utc_now
-from .role import current as role
-from .services.store import State
-from .settings import settings, PEER_API
+from wf_peering.exceptions import CheckError
+from wf_peering.protocol.entries import utc_now
+from wf_peering.role import current as role
+from wf_peering.services import StateService
+from wf_peering.settings import settings, PEER_API
 
 
 def guarded(name: str):
@@ -19,133 +20,6 @@ def guarded(name: str):
         wrapper.__name__ = f"peering_{name}"
         return wrapper
     return decorator
-
-
-@guarded("startup")
-async def startup():
-    from .services.uptime import Uptime
-    from .services.peers import Peers
-    from .services.checkpoints import Checkpoints
-
-    await Uptime.boot()
-    await Peers.reset_connections(role().live_connections())
-    await Peers.expire()
-    await Checkpoints.fill_missing()
-    await role().startup()
-    await probes()
-    await verify()
-    await trust()
-
-
-@guarded("heartbeat")
-async def heartbeat():
-    from .services.uptime import Uptime
-    await Uptime.beat()
-    await role().heartbeat()
-
-
-@guarded("probes")
-async def probes():
-    from .services.peers import Peers, check_node, normalize_url
-    from .utils import netcheck
-    from .services.checkpoints import Checkpoints
-
-    try:
-        await State.set("self_check", await netcheck.inspect(settings.origin))
-    except Exception as exc:
-        log_factory.warning(f"[peering] Inspecting the own origin failed: {exc}")
-
-    await role().discover()
-
-    for url in settings.peers:
-        await Peers.remember(url, "config")
-
-    rows = [row for row in await Peers.all(False)][:settings.max_peers]
-    for row in rows:
-        report = await check_node(row.url)
-        await Peers.store_check(row.url, report, bool(report.get("ok")), report.get("error"))
-        if not report.get("ok"): continue
-        try:
-            status, data, _ = await netcheck.get_json(row.url, f"{PEER_API}/checkpoints?limit=3", 512 * 1024)
-            if status == 200 and isinstance(data, dict):
-                for item in data.get("checkpoints") or []:
-                    if isinstance(item, dict) and item.get("content"):
-                        await Checkpoints.remember_remote(
-                            { "checkpoint": item["content"], "signature": item.get("signature"), "hash": item.get("hash") },
-                            via="direct"
-                        )
-        except netcheck.CheckError:
-            pass
-        if settings.is_peer:
-            try:
-                status, data, _ = await netcheck.get_json(row.url, f"{PEER_API}/peers", 512 * 1024)
-                if status == 200 and isinstance(data, dict):
-                    for peer in (data.get("peers") or [])[:16]:
-                        url = normalize_url(peer.get("url") or "") if isinstance(peer, dict) else None
-                        if url: await Peers.remember(url, "gossip")
-            except netcheck.CheckError:
-                pass
-
-
-@guarded("verify")
-async def verify():
-    from .services.ledger import Ledger
-    from .services.journal import Journal
-    key = await Ledger.host_key()
-    report = await Ledger.verify(key)
-    journal = await Journal.verify()
-    await State.set("ledger_verification", dict(report, journal_problems=journal[:20],
-                                                journal_valid=not journal, checked_at=utc_now()))
-    if not report["valid"] or journal:
-        from .services.store import Conflicts
-        await Conflicts.record("local-store-invalid", "critical",
-                               "The stored ledger or journal failed its own verification.",
-                               { "ledger": report["problems"][:20], "journal": journal[:20] },
-                               subject="self", key={ "ledger": report["problems"][:3], "journal": journal[:3] })
-
-
-@guarded("trust")
-async def trust():
-    from .services.trust import Trust
-    await Trust.assess()
-
-
-@guarded("checkpoint")
-async def checkpoint():
-    from .services.checkpoints import Checkpoints
-    await Checkpoints.compute()
-
-
-@guarded("retention")
-async def retention():
-    from .services.peers import Peers, check_node
-    from .services.trust import Trust
-    await Peers.prune_probes()
-    await Trust.prune()
-    await Peers.expire()
-    for row in (await Peers.inactive())[:settings.max_peers]:
-        report = await check_node(row.url)
-        await Peers.store_check(row.url, report, bool(report.get("ok")), report.get("error"))
-
-
-class Activity:
-    counts: dict = {}
-
-    @classmethod
-    def count(cls, key: str):
-        cls.counts[key] = cls.counts.get(key, 0) + 1
-
-    @classmethod
-    def drain(cls) -> dict:
-        counts, cls.counts = cls.counts, {}
-        return counts
-
-
-@guarded("activity")
-async def activity():
-    from .services.journal import Journal
-    counts = Activity.drain()
-    if counts: await Journal.append("peering:activity", { "rest": counts, "until": utc_now() })
 
 
 def schedule():
@@ -165,3 +39,126 @@ def schedule():
     hour, minute = settings.checkpoint_time
     scheduler.add_job(checkpoint, CronTrigger(hour=hour, minute=minute, timezone="UTC"),
                       misfire_grace_time=3600, coalesce=True)
+
+
+@guarded("startup")
+async def startup():
+    from wf_peering.services import UptimeService, PeerService, CheckpointService
+
+    await UptimeService.boot()
+    await PeerService.reset_connections(role().live_connections())
+    await PeerService.expire()
+    await CheckpointService.fill_missing()
+    await role().startup()
+    await probes()
+    await verify()
+    await trust()
+
+
+@guarded("heartbeat")
+async def heartbeat():
+    from wf_peering.services import UptimeService
+    await UptimeService.beat()
+    await role().heartbeat()
+
+
+@guarded("probes")
+async def probes():
+    from wf_peering.services import PeerService, CheckpointService
+    from wf_peering.utils import netcheck
+
+    try:
+        await StateService.set("self_check", await netcheck.inspect(settings.origin))
+    except Exception as exc:
+        log_factory.warning(f"[peering] Inspecting the own origin failed: {exc}")
+
+    await role().discover()
+
+    for url in settings.peers:
+        await PeerService.remember(url, "config")
+
+    rows = [row for row in await PeerService.all(False)][:settings.max_peers]
+    for row in rows:
+        report = await PeerService.check_node(row.url)
+        await PeerService.store_check(row.url, report, bool(report.get("ok")), report.get("error"))
+        if not report.get("ok"): continue
+        try:
+            status, data, _ = await netcheck.get_json(row.url, f"{PEER_API}/checkpoints?limit=3", 512 * 1024)
+            if status == 200 and isinstance(data, dict):
+                for item in data.get("checkpoints") or []:
+                    if isinstance(item, dict) and item.get("content"):
+                        await CheckpointService.remember_remote(
+                            { "checkpoint": item["content"], "signature": item.get("signature"),
+                             "hash": item.get("hash") },
+                            via="direct"
+                        )
+        except CheckError:
+            pass
+        if settings.is_peer:
+            try:
+                status, data, _ = await netcheck.get_json(row.url, f"{PEER_API}/peers", 512 * 1024)
+                if status == 200 and isinstance(data, dict):
+                    for peer in (data.get("peers") or [])[:16]:
+                        url = PeerService.normalize_url(peer.get("url") or "") if isinstance(peer, dict) else None
+                        if url: await PeerService.remember(url, "gossip")
+            except CheckError:
+                pass
+
+
+@guarded("verify")
+async def verify():
+    from wf_peering.services import LedgerService, JournalService
+    key = await LedgerService.host_key()
+    report = await LedgerService.verify(key)
+    journal = await JournalService.verify()
+    await StateService.set("ledger_verification", dict(report, journal_problems=journal[:20],
+                                                journal_valid=not journal, checked_at=utc_now()))
+    if not report["valid"] or journal:
+        from wf_peering.services import ConflictService
+        await ConflictService.record("local-store-invalid", "critical",
+                               "The stored ledger or journal failed its own verification.",
+                               { "ledger": report["problems"][:20], "journal": journal[:20] },
+                               subject="self", key={ "ledger": report["problems"][:3], "journal": journal[:3] })
+
+
+@guarded("trust")
+async def trust():
+    from wf_peering.services import TrustService
+    await TrustService.assess()
+
+
+@guarded("checkpoint")
+async def checkpoint():
+    from wf_peering.services import CheckpointService
+    await CheckpointService.compute()
+
+
+@guarded("retention")
+async def retention():
+    from wf_peering.services import PeerService, TrustService
+    await PeerService.prune_probes()
+    await TrustService.prune()
+    await PeerService.expire()
+    for row in (await PeerService.inactive())[:settings.max_peers]:
+        report = await PeerService.check_node(row.url)
+        await PeerService.store_check(row.url, report, bool(report.get("ok")), report.get("error"))
+
+
+@guarded("activity")
+async def activity():
+    from wf_peering.services import JournalService
+    counts = Activity.drain()
+    if counts: await JournalService.append("peering:activity", { "rest": counts, "until": utc_now() })
+
+
+class Activity:
+    counts: dict = {}
+
+    @classmethod
+    def count(cls, key: str):
+        cls.counts[key] = cls.counts.get(key, 0) + 1
+
+    @classmethod
+    def drain(cls) -> dict:
+        counts, cls.counts = cls.counts, {}
+        return counts

@@ -33,8 +33,9 @@ verification; they enable this.
 |-------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `wf_peering.protocol`   | Pure, I/O-free protocol code: canonical JSON, Merkle trees and proofs, ledger entries, key log, signed actions, integrity records, network policy, trust scoring, handshake contexts. |
 | `wf_peering.models`     | The SQLAlchemy models (`peering_*` tables) both roles store their state in.                                                                                                           |
-| `wf_peering.services`   | Node identity, the signed ledger (`append` on the host, `ingest` on a peer), journal, account replay, integrity storage, peer directory, uptime, checkpoints, trust, status.          |
-| `wf_peering.utils`      | `netcheck`: fetching and inspecting a remote origin under the network policy (DNS pinning, TLS, size limits).                                                                         |
+| `wf_peering.services`   | One `<Domain>Service` per concern, exported from the package: identity, ledger (`append` on the host, `ingest` on a peer), journal, accounts, integrity, peers, uptime, checkpoints, trust, state, conflicts, status. |
+| `wf_peering.utils`      | `netcheck`: fetching and inspecting a remote origin under the network policy (DNS pinning, TLS, size limits); `serialization`: the compact JSON every table stores. |
+| `wf_peering.exceptions` | `CanonicalError`, `IntegrityRecordError`, `PolicyError`, `LedgerError`, `CheckError`. |
 | `wf_peering.settings`   | The `PEERING_*` settings of the process (`settings`, `configure`) and the protocol constants (`HOST_API`, `PEER_API`, `HOST_SOCKET`, versions).                                       |
 | `wf_peering.role`       | `NodeRole`, the seam between host and peer, and the role the extension was expanded with.                                                                                             |
 | `wf_peering.jobs`       | The shared jobs (startup, heartbeat, probes, trust, ledger verification, activity, retention, checkpoint) and `guarded`, which an application wraps its own jobs in.                  |
@@ -58,11 +59,11 @@ peering.expand_fluid(app, role=MyPeerRole())                       # a peer, e.g
 ```
 
 The extension is expanded with the role of the process that uses it; the settings, jobs, API and
-status page it brings are described in [CONTRACT.md](src/wf_peering/CONTRACT.md).
+status page it brings are described in [CONTRACT.md](src/wf_peering/.agents/CONTRACT.md).
 
 ## For developers and agents
 
-- [CONTRACT.md](src/wf_peering/CONTRACT.md) — expansion, settings, protocols, public API, trust, limits
+- [CONTRACT.md](src/wf_peering/.agents/CONTRACT.md) — expansion, settings, protocols, public API, trust, limits
 - [.agents/SKILL.md](src/wf_peering/.agents/SKILL.md) — what a coding agent needs to work on or with it
 - [CHANGELOG.md](CHANGELOG.md) — what changed, version by version
 

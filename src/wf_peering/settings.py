@@ -1,8 +1,7 @@
+from webfluid.core.constants import DEBUG
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
-
-from webfluid.core.constants import DEBUG
 
 PROTOCOL_VERSION = 1
 SCHEMA_VERSION = 1
@@ -11,55 +10,6 @@ HOST_API = "/peering/api/v1"
 PEER_API = "/api/v1"
 HOST_SOCKET = "/peering/ws/peer"
 ROLES = ("host", "peer")
-
-
-@dataclass
-class Settings:
-    role: str = "host"
-    origin: str = "http://localhost:8000"
-    host: str | None = None
-    host_key: str | None = None
-    key_file: Path | None = None
-    node_key: str | None = None
-    peers: list = field(default_factory=list)
-    references: dict = field(default_factory=dict)
-    reference_hosts: list = field(default_factory=list)
-    allow_insecure: bool = False
-    debug: bool = False
-    max_peers: int = 64
-    registrations_per_hour: int = 20
-    max_response_bytes: int = 2 * 1024 * 1024
-    timeout: int = 10
-    schedule: bool = True
-    sync_time: tuple = (23, 59)
-    checkpoint_time: tuple = (0, 0)
-    checkpoint_grace: int = 300
-    sync_attempts: int = 3
-    integrity_interval: int = 900
-    probe_interval: int = 300
-    trust_interval: int = 600
-    heartbeat_interval: int = 30
-    probe_retention_days: int = 30
-    peer_inactive_days: int = 30
-    ledger_page: int = 500
-
-    @property
-    def is_host(self) -> bool:
-        return self.role == "host"
-
-    @property
-    def is_peer(self) -> bool:
-        return self.role == "peer"
-
-    @property
-    def assessed(self) -> str | None:
-        return self.host if self.is_peer else self.origin
-
-    def api_of(self, url: str | None) -> str:
-        return HOST_API if url is not None and url == self.assessed else PEER_API
-
-
-settings = Settings()
 
 
 def _origin(value: str | None) -> str | None:
@@ -107,3 +57,52 @@ def configure(config, role: str, root: Path) -> Settings:
     if role == "peer" and not settings.host:
         raise ValueError("PEERING_HOST is required on a peer.")
     return settings
+
+
+@dataclass
+class Settings:
+    role: str = "host"
+    origin: str = "http://localhost:8000"
+    host: str | None = None
+    host_key: str | None = None
+    key_file: Path | None = None
+    node_key: str | None = None
+    peers: list = field(default_factory=list)
+    references: dict = field(default_factory=dict)
+    reference_hosts: list = field(default_factory=list)
+    allow_insecure: bool = False
+    debug: bool = False
+    max_peers: int = 64
+    registrations_per_hour: int = 20
+    max_response_bytes: int = 2 * 1024 * 1024
+    timeout: int = 10
+    schedule: bool = True
+    sync_time: tuple = (23, 59)
+    checkpoint_time: tuple = (0, 0)
+    checkpoint_grace: int = 300
+    sync_attempts: int = 3
+    integrity_interval: int = 900
+    probe_interval: int = 300
+    trust_interval: int = 600
+    heartbeat_interval: int = 30
+    probe_retention_days: int = 30
+    peer_inactive_days: int = 30
+    ledger_page: int = 500
+
+    def api_of(self, url: str | None) -> str:
+        return HOST_API if url is not None and url == self.assessed else PEER_API
+
+    @property
+    def is_host(self) -> bool:
+        return self.role == "host"
+
+    @property
+    def is_peer(self) -> bool:
+        return self.role == "peer"
+
+    @property
+    def assessed(self) -> str | None:
+        return self.host if self.is_peer else self.origin
+
+
+settings = Settings()

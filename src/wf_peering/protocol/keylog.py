@@ -1,8 +1,11 @@
-import hashlib, re
 from dataclasses import dataclass, field
+import hashlib, re
 
-from .canonical import digest, CanonicalError
-from .signing import b64encode, verify, valid_ed25519, valid_x25519, fingerprint
+from wf_peering.exceptions import CanonicalError
+from wf_peering.protocol.canonical import digest
+from wf_peering.protocol.signing import b64encode, verify, valid_ed25519, valid_x25519, fingerprint
+
+_HANDLE = re.compile(r"^a1\.[A-Za-z0-9_-]{22}$")
 
 PROTOCOL = "wf-keylog-v1"
 SUBJECT_CONTEXT = "wf-keylog-v1:subject"
@@ -14,101 +17,13 @@ TYPES = ("device.bind", "device.revoke", "recovery.set", "browser.bind", "browse
 REQUIRES_AUTHORITY = ("device.revoke", "browser.revoke", "browser.link", "browser.unlink")
 AUTHORITIES = ("self", "device", "recovery", "host", "legacy")
 
-_HANDLE = re.compile(r"^a1\.[A-Za-z0-9_-]{22}$")
-
-
-def normalize_origin(origin: str) -> str:
-    text = (origin or "").strip().lower()
-    while text.endswith("/"): text = text[:-1]
-    return text
-
-
-def account_handle(origin: str, user_id: int) -> str:
-    raw = f"wf-account-v1\n{normalize_origin(origin)}\n{int(user_id)}".encode("utf-8")
-    return "a1." + b64encode(hashlib.sha256(raw).digest()[:16])
-
-
-def valid_handle(value) -> bool:
-    return isinstance(value, str) and bool(_HANDLE.match(value))
-
-
-@dataclass
-class Flag:
-    code: str
-    severity: str
-
-    def to_dict(self) -> dict:
-        return { "code": self.code, "severity": self.severity }
-
-
-@dataclass
-class AccountKeys:
-    handle: str
-    seq: int = 0
-    head: str = GENESIS
-    device: dict | None = None
-    recovery: str | None = None
-    browsers: list = field(default_factory=list)
-    links: list = field(default_factory=list)
-    broken: bool = False
-    flags: list = field(default_factory=list)
-
-    @property
-    def anchored(self) -> bool:
-        return self.device is not None or self.recovery is not None
-
-    @property
-    def device_fingerprint(self) -> str | None:
-        return fingerprint(self.device["sig"]) if self.device else None
-
-    def to_dict(self) -> dict:
-        return {
-            "account": self.handle,
-            "seq": self.seq,
-            "head": self.head,
-            "device": dict(self.device) if self.device else None,
-            "device_fingerprint": self.device_fingerprint,
-            "recovery": self.recovery,
-            "browsers": list(self.browsers),
-            "links": list(self.links),
-            "broken": self.broken,
-            "flags": [flag.to_dict() for flag in self.flags]
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "AccountKeys":
-        return cls(
-            handle=data["account"], seq=data["seq"], head=data["head"],
-            device=data.get("device"), recovery=data.get("recovery"),
-            browsers=list(data.get("browsers") or []), links=list(data.get("links") or []),
-            broken=bool(data.get("broken")),
-            flags=[Flag(**flag) for flag in data.get("flags") or []]
-        )
-
-
-@dataclass
-class Verdict:
-    valid: bool
-    applied: bool
-    flags: list
-
-    def to_dict(self) -> dict:
-        return {
-            "valid": self.valid,
-            "applied": self.applied,
-            "flags": [flag.to_dict() for flag in self.flags]
-        }
-
-
-def statement_hash(statement: dict) -> str:
-    return digest(statement)
-
 
 def _shape(statement) -> list[str]:
     if not isinstance(statement, dict): return ["NOT_AN_OBJECT"]
     issues = []
     allowed = { "v", "account", "seq", "prev", "type", "authority", "keys", "ts", "reset" }
-    if not set(statement) <= allowed or not { "v", "account", "seq", "prev", "type", "authority", "keys", "ts" } <= set(statement):
+    if not set(statement) <= allowed or not { "v", "account", "seq", "prev", "type", "authority", "keys",
+                                             "ts" } <= set(statement):
         issues.append("UNEXPECTED_FIELDS")
     if statement.get("v") != 1: issues.append("UNSUPPORTED_VERSION")
     if not valid_handle(statement.get("account")): issues.append("INVALID_ACCOUNT")
@@ -127,6 +42,33 @@ def _authority_key(state: AccountKeys, authority: str) -> str | None:
     if authority == "device" and state.device: return state.device["sig"]
     if authority == "recovery" and state.recovery: return state.recovery
     return None
+
+
+def _broken(state: AccountKeys, flags: list) -> AccountKeys:
+    return AccountKeys(
+        handle=state.handle, seq=state.seq, head=state.head,
+        device=state.device, recovery=state.recovery, browsers=list(state.browsers), links=list(state.links),
+        broken=True, flags=list(state.flags) + flags
+    )
+
+
+def normalize_origin(origin: str) -> str:
+    text = (origin or "").strip().lower()
+    while text.endswith("/"): text = text[:-1]
+    return text
+
+
+def account_handle(origin: str, user_id: int) -> str:
+    raw = f"wf-account-v1\n{normalize_origin(origin)}\n{int(user_id)}".encode("utf-8")
+    return "a1." + b64encode(hashlib.sha256(raw).digest()[:16])
+
+
+def valid_handle(value) -> bool:
+    return isinstance(value, str) and bool(_HANDLE.match(value))
+
+
+def statement_hash(statement: dict) -> str:
+    return digest(statement)
 
 
 def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
@@ -264,14 +206,6 @@ def evaluate(state: AccountKeys, envelope: dict) -> tuple[Verdict, AccountKeys]:
     return Verdict(True, True, flags), nxt
 
 
-def _broken(state: AccountKeys, flags: list) -> AccountKeys:
-    return AccountKeys(
-        handle=state.handle, seq=state.seq, head=state.head,
-        device=state.device, recovery=state.recovery, browsers=list(state.browsers), links=list(state.links),
-        broken=True, flags=list(state.flags) + flags
-    )
-
-
 def replay(handle: str, envelopes: list[dict]) -> tuple[AccountKeys, list[Verdict]]:
     state = AccountKeys(handle=handle)
     verdicts = []
@@ -279,3 +213,71 @@ def replay(handle: str, envelopes: list[dict]) -> tuple[AccountKeys, list[Verdic
         verdict, state = evaluate(state, envelope)
         verdicts.append(verdict)
     return state, verdicts
+
+
+@dataclass
+class Flag:
+    code: str
+    severity: str
+
+    def to_dict(self) -> dict:
+        return { "code": self.code, "severity": self.severity }
+
+
+@dataclass
+class AccountKeys:
+    handle: str
+    seq: int = 0
+    head: str = GENESIS
+    device: dict | None = None
+    recovery: str | None = None
+    browsers: list = field(default_factory=list)
+    links: list = field(default_factory=list)
+    broken: bool = False
+    flags: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "account": self.handle,
+            "seq": self.seq,
+            "head": self.head,
+            "device": dict(self.device) if self.device else None,
+            "device_fingerprint": self.device_fingerprint,
+            "recovery": self.recovery,
+            "browsers": list(self.browsers),
+            "links": list(self.links),
+            "broken": self.broken,
+            "flags": [flag.to_dict() for flag in self.flags]
+        }
+
+    @property
+    def anchored(self) -> bool:
+        return self.device is not None or self.recovery is not None
+
+    @property
+    def device_fingerprint(self) -> str | None:
+        return fingerprint(self.device["sig"]) if self.device else None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AccountKeys":
+        return cls(
+            handle=data["account"], seq=data["seq"], head=data["head"],
+            device=data.get("device"), recovery=data.get("recovery"),
+            browsers=list(data.get("browsers") or []), links=list(data.get("links") or []),
+            broken=bool(data.get("broken")),
+            flags=[Flag(**flag) for flag in data.get("flags") or []]
+        )
+
+
+@dataclass
+class Verdict:
+    valid: bool
+    applied: bool
+    flags: list
+
+    def to_dict(self) -> dict:
+        return {
+            "valid": self.valid,
+            "applied": self.applied,
+            "flags": [flag.to_dict() for flag in self.flags]
+        }

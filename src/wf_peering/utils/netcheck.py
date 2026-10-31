@@ -1,13 +1,13 @@
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from datetime import datetime, UTC
-import asyncio, hashlib, json, socket, ssl, time
-import httpx
+from urllib.parse import urlsplit
+import asyncio, hashlib, httpx, json, socket, ssl, time
 
-from ..protocol.netpolicy import Target, PolicyError, parse_target, address_allowed
-from ..settings import settings
+from wf_peering.exceptions import PolicyError, CheckError
+from wf_peering.protocol.netpolicy import Target, parse_target, address_allowed
+from wf_peering.settings import settings
 
-USER_AGENT = "webfluid-peering/1"
 CONCURRENCY = 8
 
 _VERIFY_CODES = {
@@ -20,21 +20,29 @@ _VERIFY_CODES = {
     62: "HOSTNAME_MISMATCH"
 }
 
-
-class CheckError(Exception):
-    def __init__(self, code: str, detail: str = ""):
-        super().__init__(code)
-        self.code = code
-        self.detail = detail
-
-
 _semaphore: asyncio.Semaphore | None = None
+
+USER_AGENT = "webfluid-peering/1"
 
 
 def _gate() -> asyncio.Semaphore:
     global _semaphore
     if _semaphore is None: _semaphore = asyncio.Semaphore(CONCURRENCY)
     return _semaphore
+
+
+def _context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
+def _name(entries) -> str:
+    return ", ".join("=".join(part) for entry in entries or () for part in entry)
+
+
+def _literal(address: str) -> str:
+    return f"[{address}]" if ":" in address else address
 
 
 def target(url: str, allowed_ports=(443,)) -> Target:
@@ -70,16 +78,6 @@ async def resolve(where: Target) -> dict:
         raise CheckError("ADDRESS_NOT_ALLOWED", ",".join(rejected))
     if not v4 and not v6: raise CheckError("NO_ADDRESS")
     return { "v4": sorted(v4), "v6": sorted(v6), "rejected": rejected }
-
-
-def _context() -> ssl.SSLContext:
-    context = ssl.create_default_context()
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    return context
-
-
-def _name(entries) -> str:
-    return ", ".join("=".join(part) for entry in entries or () for part in entry)
 
 
 async def tls(where: Target, address: str) -> dict:
@@ -122,10 +120,6 @@ async def tls(where: Target, address: str) -> dict:
             writer.close()
             try: await asyncio.wait_for(writer.wait_closed(), timeout=2)
             except (asyncio.TimeoutError, OSError, ssl.SSLError): pass
-
-
-def _literal(address: str) -> str:
-    return f"[{address}]" if ":" in address else address
 
 
 async def fetch(where: Target, address: str, path: str, max_bytes: int | None = None) -> dict:
@@ -193,9 +187,9 @@ async def get_json(url: str, path: str, max_bytes: int | None = None) -> tuple[i
 async def reference(url: str, max_bytes: int = 512 * 1024) -> bytes:
     if not isinstance(url, str) or not url.startswith("https://"):
         raise CheckError("REFERENCE_NOT_HTTPS")
-    from urllib.parse import urlsplit
     parts = urlsplit(url)
-    if parts.hostname not in settings.reference_hosts or parts.username or parts.password or parts.port not in (None, 443):
+    if parts.hostname not in settings.reference_hosts or parts.username or parts.password or parts.port not in (None,
+                                                                                                                443):
         raise CheckError("REFERENCE_HOST_NOT_ALLOWED", parts.hostname or "")
     path = parts.path + (f"?{parts.query}" if parts.query else "")
     async with _gate():

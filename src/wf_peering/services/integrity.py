@@ -3,18 +3,35 @@ from webfluid.utils.logging import factory as log_factory
 from sqlalchemy import select
 import asyncio, json
 
-from ..models.integrity import IntegrityRun, IntegrityRecord, IntegrityCurrent, Observation
-from ..protocol import integrity as spec
-from ..protocol.canonical import canonical_text
-from ..protocol.entries import utc_now
-from .identity import NodeIdentity
-from .store import dumps, loads
+from wf_peering.exceptions import IntegrityRecordError
+from wf_peering.models.integrity import IntegrityRun, IntegrityRecord, IntegrityCurrent, Observation
+from wf_peering.protocol import integrity as spec
+from wf_peering.protocol.canonical import canonical_text
+from wf_peering.protocol.entries import utc_now
+from wf_peering.services.identity import IdentityService
+from wf_peering.utils.serialization import dumps, loads
 
 PUSH = "push:"
 
 
-class Integrity:
+class IntegrityService:
     _lock: asyncio.Lock | None = None
+
+    @staticmethod
+    def _serialize(record: IntegrityRecord, current: IntegrityCurrent | None = None) -> dict:
+        data = {
+            "record": json.loads(record.record),
+            "provider": record.provider,
+            "fingerprint": record.fingerprint,
+            "previous": record.previous,
+            "observed_at": record.observed_at,
+            "ledger_seq": record.ledger_seq,
+            "context": loads(record.context, {})
+        }
+        if current is not None:
+            data["confirmed_at"] = current.confirmed_at
+            data["missing_since"] = current.missing_since
+        return data
 
     @classmethod
     def guard(cls) -> asyncio.Lock:
@@ -48,9 +65,9 @@ class Integrity:
         fingerprint = spec.fingerprint(record)
         now = utc_now()
         context = {
-            "boot": NodeIdentity.boot_id,
-            "uptime": NodeIdentity.uptime(),
-            "started_at": NodeIdentity.started_at
+            "boot": IdentityService.boot_id,
+            "uptime": IdentityService.uptime(),
+            "started_at": IdentityService.started_at
         }
         async with db.async_executor(model=IntegrityRecord) as e:
             result = await e.exec(select(IntegrityCurrent).where(IntegrityCurrent.artifact == record["id"]))
@@ -94,7 +111,7 @@ class Integrity:
             ), scalars=False)
             for current, record in result.all():
                 if current.artifact in seen or current.missing_since: continue
-                if record.provider in failed or Integrity.pushed(current.run_id): continue
+                if record.provider in failed or IntegrityService.pushed(current.run_id): continue
                 current.missing_since = utc_now()
                 missing.append(current.artifact)
         return missing
@@ -131,7 +148,7 @@ class Integrity:
             return
         if kind != "peering:integrity": return
         try: record = spec.normalize(body.get("record"), body.get("provider"))
-        except spec.IntegrityError as exc:
+        except IntegrityRecordError as exc:
             log_factory.warning(f"[peering] Replicated integrity entry {content.get('seq')} is invalid: {exc}")
             return
         async with db.async_executor(model=IntegrityRecord) as e:
@@ -151,22 +168,6 @@ class Integrity:
                 current.missing_since = None
             else:
                 await e.insert(IntegrityCurrent(record["id"], row.id, content["ts"], row.run_id))
-
-    @staticmethod
-    def _serialize(record: IntegrityRecord, current: IntegrityCurrent | None = None) -> dict:
-        data = {
-            "record": json.loads(record.record),
-            "provider": record.provider,
-            "fingerprint": record.fingerprint,
-            "previous": record.previous,
-            "observed_at": record.observed_at,
-            "ledger_seq": record.ledger_seq,
-            "context": loads(record.context, {})
-        }
-        if current is not None:
-            data["confirmed_at"] = current.confirmed_at
-            data["missing_since"] = current.missing_since
-        return data
 
     @classmethod
     async def current(cls) -> list[dict]:

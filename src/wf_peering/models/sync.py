@@ -1,9 +1,9 @@
+from webfluid.core.ext import db
 from sqlalchemy import String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
-from webfluid.core.ext import db
 from typing import Optional
 
-from . import TABLE_PREFIX
+from wf_peering.models import TABLE_PREFIX
 
 
 def _unique_name(name: str) -> str:

@@ -1,25 +1,18 @@
 from pathlib import Path
 import os, secrets, time
 
-from ..protocol.entries import utc_now
-from ..protocol.signing import Signer, b64decode, b64encode
-from ..settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
+from wf_peering.protocol.entries import utc_now
+from wf_peering.protocol.signing import Signer, b64decode, b64encode
+from wf_peering.settings import settings, PROTOCOL_VERSION, SCHEMA_VERSION
 
 NODE_CONTEXT = "wf-peering-node-v1"
 
 
-class NodeIdentity:
+class IdentityService:
     signer: Signer | None = None
     boot_id: str = ""
     started_at: str = ""
     started_monotonic: float = 0.0
-
-    @classmethod
-    def setup(cls):
-        cls.signer = Signer(cls._seed())
-        cls.boot_id = b64encode(secrets.token_bytes(12))
-        cls.started_at = utc_now()
-        cls.started_monotonic = time.monotonic()
 
     @staticmethod
     def _seed() -> bytes:
@@ -42,6 +35,13 @@ class NodeIdentity:
         return seed
 
     @classmethod
+    def setup(cls):
+        cls.signer = Signer(cls._seed())
+        cls.boot_id = b64encode(secrets.token_bytes(12))
+        cls.started_at = utc_now()
+        cls.started_monotonic = time.monotonic()
+
+    @classmethod
     def node_id(cls) -> str:
         return cls.signer.fingerprint
 
@@ -59,7 +59,7 @@ class NodeIdentity:
 
     @classmethod
     def statement(cls) -> dict:
-        from ..role import current
+        from wf_peering.role import current
         return {
             "node": cls.node_id(),
             "key": cls.public_key(),

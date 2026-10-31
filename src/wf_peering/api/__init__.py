@@ -1,5 +1,5 @@
-from functools import wraps
 from fastapi import APIRouter
+from functools import wraps
 
 from . import checkpoints, integrity, ledger, node, peers, trust
 
@@ -36,7 +36,7 @@ def counted(path: str, handler):
 
     @wraps(handler)
     async def wrapper(*args, **kwargs):
-        from ..jobs import Activity
+        from wf_peering.jobs import Activity
         Activity.count(group)
         return await handler(*args, **kwargs)
     return wrapper

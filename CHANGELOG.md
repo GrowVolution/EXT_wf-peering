@@ -8,10 +8,23 @@ a host and its peers share one implementation.
 
 Requires WebFluid `1.0.0rc1`. The documentation is split by reader: `README.md` says what the
 extension is and why it exists, `DOCS.md` explains the protocol, the roles and the operation of a
-node to the people who run one, `src/wf_peering/CONTRACT.md` holds the integration surface — expansion, settings,
+node to the people who run one, `src/wf_peering/.agents/CONTRACT.md` holds the integration surface — expansion, settings,
 protocols, public API, trust score, security notes and limits — and `src/wf_peering/.agents` tells a
 coding agent how to work on it or with it. Nothing in the package's API changed with that split.
 
+- `CONTRACT.md` moves to `.agents/CONTRACT.md`, next to the skill, so everything addressed to agents
+  lives in one folder.
+- Every service is a class exported from `wf_peering.services`: `IdentityService`, `LedgerService`,
+  `JournalService`, `AccountService`, `IntegrityService`, `PeerService`, `UptimeService`,
+  `CheckpointService`, `TrustService`, `StateService`, `ConflictService` and `StatusService`. The
+  module functions of `accounts`, `checkpoints`, `ledger`, `peers`, `status` and `trust` are
+  methods of their service now, `services.store` is split into `services.state`,
+  `services.conflicts` and `utils.serialization`, every exception lives in `wf_peering.exceptions`
+  (the integrity record error is `IntegrityRecordError`), and the package imports itself absolutely.
+  **Upgrade:** import services from `wf_peering.services` and exceptions from
+  `wf_peering.exceptions`; `Ledger` is `LedgerService`, `Peers` is `PeerService`,
+  `NodeIdentity` is `IdentityService`, `State` is `StateService`, `Conflicts` is `ConflictService`,
+  and so on; `verify_claim`, `check_node`, `next_at` and `summary` are called on their service.
 - Protocols: WF-CJSON-1 canonical JSON, RFC 6962/9162 Merkle roots with inclusion and consistency proofs,
   signed ledger entries and heads, node journal, key log (`wf-keylog-v1`), signed actions (`wf-action-v1`),
   integrity records, checkpoints, trust reports, the host–peer handshake.

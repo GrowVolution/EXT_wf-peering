@@ -48,8 +48,8 @@ extension brings storage, jobs, the public API and the status page for that role
 
 ## Contract map
 
-<!-- index ../CONTRACT.md -->
-Sections of `../CONTRACT.md`, as that file stands now:
+<!-- index CONTRACT.md -->
+Sections of `CONTRACT.md`, as that file stands now:
 
 - `26-39` **At a glance**
 - `40-93` **Using it**

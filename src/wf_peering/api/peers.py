@@ -1,18 +1,18 @@
 from fastapi import Request
-from .utils import public
+
+from wf_peering.api.utils import public
 
 
 async def peers_request(request: Request):
-    from ..services.peers import Peers, serialize
-    from ..settings import settings
-    from ..services.identity import NodeIdentity
+    from wf_peering.services import PeerService, IdentityService
+    from wf_peering.settings import settings
     peers = []
-    for row in await Peers.all(False):
-        data = serialize(row)
+    for row in await PeerService.all(False):
+        data = PeerService.serialize(row)
         data.pop("check", None)
         check = row.check
         if check:
-            from ..services.store import loads
+            from wf_peering.utils.serialization import loads
             parsed = loads(check, {})
             data["last_check"] = {
                 "checked_at": parsed.get("checked_at"), "ok": parsed.get("ok"), "error": parsed.get("error"),
@@ -22,12 +22,12 @@ async def peers_request(request: Request):
             }
         peers.append(data)
     return public({
-        "reporter": { "node": NodeIdentity.node_id(), "role": settings.role, "url": settings.origin },
+        "reporter": { "node": IdentityService.node_id(), "role": settings.role, "url": settings.origin },
         "claim": "This list is what this node knows about. It is one source, not proof of completeness.",
         "peers": peers
     })
 
 
 async def connections_request(request: Request):
-    from ..services.peers import Peers
-    return public({ "connections": await Peers.connections() })
+    from wf_peering.services import PeerService
+    return public({ "connections": await PeerService.connections() })

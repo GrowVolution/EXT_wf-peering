@@ -7,23 +7,10 @@ def _h(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
 
-def leaf_hash(data: bytes) -> str:
-    return _h(b"\x00" + data).hex()
-
-
-def node_hash(left: str, right: str) -> str:
-    return _h(b"\x01" + bytes.fromhex(left) + bytes.fromhex(right)).hex()
-
-
 def _split(n: int) -> int:
     k = 1
     while k << 1 < n: k <<= 1
     return k
-
-
-def root(leaves: list[str]) -> str:
-    if not leaves: return EMPTY_ROOT
-    return _root(leaves, 0, len(leaves), {})
 
 
 def _root(leaves: list[str], start: int, end: int, cache: dict) -> str:
@@ -35,6 +22,19 @@ def _root(leaves: list[str], start: int, end: int, cache: dict) -> str:
     value = node_hash(_root(leaves, start, start + k, cache), _root(leaves, start + k, end, cache))
     cache[key] = value
     return value
+
+
+def leaf_hash(data: bytes) -> str:
+    return _h(b"\x00" + data).hex()
+
+
+def node_hash(left: str, right: str) -> str:
+    return _h(b"\x01" + bytes.fromhex(left) + bytes.fromhex(right)).hex()
+
+
+def root(leaves: list[str]) -> str:
+    if not leaves: return EMPTY_ROOT
+    return _root(leaves, 0, len(leaves), {})
 
 
 def inclusion_proof(index: int, leaves: list[str]) -> list[str]:

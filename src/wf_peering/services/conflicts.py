@@ -1,44 +1,30 @@
 from webfluid.core.ext import db
 from webfluid.utils.logging import factory as log_factory
 from sqlalchemy import select, func
-import json
 
-from ..models.state import NodeState, Conflict
-from ..protocol.canonical import digest
-from ..protocol.entries import utc_now
-
-
-def dumps(value) -> str:
-    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+from wf_peering.models.state import Conflict
+from wf_peering.protocol.canonical import digest
+from wf_peering.protocol.entries import utc_now
+from wf_peering.utils.serialization import dumps, loads
 
 
-def loads(value, default=None):
-    if value is None: return default
-    try: return json.loads(value)
-    except (TypeError, ValueError): return default
+def _conflict(row: Conflict) -> dict:
+    return {
+        "id": row.id,
+        "kind": row.kind,
+        "severity": row.severity,
+        "subject": row.subject,
+        "summary": row.summary,
+        "evidence": loads(row.evidence, {}),
+        "detected_at": row.detected_at,
+        "resolved_at": row.resolved_at
+    }
 
 
-class State:
-    @staticmethod
-    async def get(key: str, default=None):
-        async with db.async_executor(model=NodeState) as e:
-            result = await e.exec(select(NodeState).where(NodeState.key == key))
-            row = result.first()
-            return loads(row.value, default) if row else default
-
-    @staticmethod
-    async def set(key: str, value):
-        async with db.async_executor(model=NodeState) as e:
-            result = await e.exec(select(NodeState).where(NodeState.key == key))
-            row = result.first()
-            if row: row.value = dumps(value)
-            else: await e.insert(NodeState(key, dumps(value)))
-
-
-class Conflicts:
+class ConflictService:
     @staticmethod
     def _signal(data: dict):
-        from ..role import current
+        from wf_peering.role import current
         try: current().alert(data)
         except Exception as exc: log_factory.exception(exc, "[peering] Forwarding a conflict alert failed.")
 
@@ -55,8 +41,8 @@ class Conflicts:
             ))
 
         log_factory.warning(f"[peering] {severity.upper()} {kind}: {summary}")
-        from .journal import Journal
-        await Journal.append("peering:conflict", {
+        from wf_peering.services.journal import JournalService
+        await JournalService.append("peering:conflict", {
             "kind": kind, "severity": severity, "subject": subject,
             "summary": summary[:512], "fingerprint": fingerprint
         })
@@ -84,16 +70,3 @@ class Conflicts:
                 Conflict.resolved_at.is_(None)
             ).group_by(Conflict.severity), scalars=False)
             return { severity: count for severity, count in result.all() }
-
-
-def _conflict(row: Conflict) -> dict:
-    return {
-        "id": row.id,
-        "kind": row.kind,
-        "severity": row.severity,
-        "subject": row.subject,
-        "summary": row.summary,
-        "evidence": loads(row.evidence, {}),
-        "detected_at": row.detected_at,
-        "resolved_at": row.resolved_at
-    }

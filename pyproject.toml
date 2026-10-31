@@ -35,8 +35,7 @@ wf_peering = [
     "static/**/*",
     "templates/**/*",
     "i18n/*.json",
-    ".agents/*.md",
-    "CONTRACT.md"
+    ".agents/*.md"
 ]
 
 [tool.pytest.ini_options]

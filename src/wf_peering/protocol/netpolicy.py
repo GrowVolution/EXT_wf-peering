@@ -1,6 +1,8 @@
-import ipaddress
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+import ipaddress
+
+from wf_peering.exceptions import PolicyError
 
 _MULTI_LABEL_SUFFIXES = {
     "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "co.jp", "ne.jp", "or.jp", "com.au", "net.au",
@@ -8,24 +10,6 @@ _MULTI_LABEL_SUFFIXES = {
     "gitlab.io", "pages.dev", "netlify.app", "vercel.app", "herokuapp.com", "onrender.com",
     "fly.dev", "workers.dev", "azurewebsites.net", "cloudfront.net", "appspot.com"
 }
-
-
-class PolicyError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class Target:
-    scheme: str
-    host: str
-    port: int
-    is_ip: bool
-
-    @property
-    def origin(self) -> str:
-        default = 443 if self.scheme == "https" else 80
-        host = f"[{self.host}]" if ":" in self.host else self.host
-        return f"{self.scheme}://{host}" + ("" if self.port == default else f":{self.port}")
 
 
 def parse_target(url: str, allow_insecure: bool = False, allowed_ports=(443,)) -> Target:
@@ -128,3 +112,17 @@ def clusters(observers: dict[str, dict]) -> list[list[str]]:
     for name in observers:
         groups.setdefault(find(name), []).append(name)
     return sorted((sorted(group) for group in groups.values()), key=lambda group: group[0])
+
+
+@dataclass(frozen=True)
+class Target:
+    scheme: str
+    host: str
+    port: int
+    is_ip: bool
+
+    @property
+    def origin(self) -> str:
+        default = 443 if self.scheme == "https" else 80
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        return f"{self.scheme}://{host}" + ("" if self.port == default else f":{self.port}")
